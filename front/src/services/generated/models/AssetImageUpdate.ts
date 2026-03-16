@@ -11,6 +11,5 @@ export type AssetImageUpdate = {
     width?: (number | null);
     height?: (number | null);
     format?: (string | null);
-    is_primary?: (boolean | null);
 };
 

@@ -1,4 +1,3 @@
-import React from 'react'
 import { AssetTypeTab } from './AssetTypeTab'
 import { StudioAssetsService } from '../../../../services/generated'
 import type { ActorImageRead } from '../../../../services/generated'
@@ -33,14 +32,8 @@ export function ActorsTab() {
       }}
       generateImage={async (assetId) => {
         const url = `https://picsum.photos/seed/actor_${assetId}_${Date.now()}/768/768`
-        const res = await StudioAssetsService.createActorImageImageApiV1StudioAssetsActorImagesActorImageIdImagesPost({
-          actorImageId: assetId,
-          requestBody: { url, is_primary: true },
-        })
-        if (!res.data) throw new Error('empty actor image image')
-        return res.data.url
+        return url
       }}
     />
   )
 }
-

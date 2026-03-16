@@ -24,10 +24,6 @@ export type SceneRead = {
      */
     description?: string;
     /**
-     * 缩略图 URL
-     */
-    thumbnail?: string;
-    /**
      * 标签
      */
     tags?: Array<string>;
@@ -35,5 +31,13 @@ export type SceneRead = {
      * 提示词模板 ID（可空）
      */
     prompt_template_id?: (string | null);
+    /**
+     * 计划为该资产生成的视角图片数量（不含分镜帧）
+     */
+    view_count?: number;
+    /**
+     * 缩略图下载地址
+     */
+    thumbnail?: string;
 };
 

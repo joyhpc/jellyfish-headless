@@ -4,12 +4,17 @@
 /* eslint-disable */
 import type { ApiResponse_FilmEntityExtractionResult_ } from '../models/ApiResponse_FilmEntityExtractionResult_';
 import type { ApiResponse_FilmShotlistResult_ } from '../models/ApiResponse_FilmShotlistResult_';
+import type { ApiResponse_GenerationTaskLinkRead_ } from '../models/ApiResponse_GenerationTaskLinkRead_';
+import type { ApiResponse_list_GenerationTaskLinkRead__ } from '../models/ApiResponse_list_GenerationTaskLinkRead__';
+import type { ApiResponse_NoneType_ } from '../models/ApiResponse_NoneType_';
 import type { ApiResponse_TaskCreated_ } from '../models/ApiResponse_TaskCreated_';
 import type { ApiResponse_TaskLinkAdoptRead_ } from '../models/ApiResponse_TaskLinkAdoptRead_';
 import type { ApiResponse_TaskResultRead_ } from '../models/ApiResponse_TaskResultRead_';
 import type { ApiResponse_TaskStatusRead_ } from '../models/ApiResponse_TaskStatusRead_';
 import type { EntityExtractRequest } from '../models/EntityExtractRequest';
 import type { EntityExtractTaskRequest } from '../models/EntityExtractTaskRequest';
+import type { GenerationTaskLinkCreate } from '../models/GenerationTaskLinkCreate';
+import type { GenerationTaskLinkUpdate } from '../models/GenerationTaskLinkUpdate';
 import type { ImageGenerationTaskRequest } from '../models/ImageGenerationTaskRequest';
 import type { ShotFramePromptRequest } from '../models/ShotFramePromptRequest';
 import type { ShotlistExtractRequest } from '../models/ShotlistExtractRequest';
@@ -208,7 +213,7 @@ export class FilmService {
     }
     /**
      * 更新任务关联的采用状态（仅可正向变更）
-     * 将指定任务链接的 is_adopted 设为 true；已采用不可改为未采用。
+     * 将指定任务链接的状态设为 accepted；已采用不可改为未采用。
      * @returns ApiResponse_TaskLinkAdoptRead_ Successful Response
      * @throws ApiError
      */
@@ -222,6 +227,141 @@ export class FilmService {
             url: '/api/v1/film/task-links/adopt',
             body: requestBody,
             mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * 生成任务关联列表（支持多条件过滤）
+     * @returns ApiResponse_list_GenerationTaskLinkRead__ Successful Response
+     * @throws ApiError
+     */
+    public static listTaskLinksApiV1FilmTaskLinksGet({
+        resourceType,
+        relationType,
+        relationEntityId,
+        status,
+        taskId,
+    }: {
+        /**
+         * 按 resource_type 过滤
+         */
+        resourceType?: (string | null),
+        /**
+         * 按 relation_type 过滤
+         */
+        relationType?: (string | null),
+        /**
+         * 按 relation_entity_id 过滤
+         */
+        relationEntityId?: (string | null),
+        /**
+         * 按关联状态过滤（accepted/todo/rejected）
+         */
+        status?: (string | null),
+        /**
+         * 按 task_id 过滤
+         */
+        taskId?: (string | null),
+    }): CancelablePromise<ApiResponse_list_GenerationTaskLinkRead__> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/api/v1/film/task-links',
+            query: {
+                'resource_type': resourceType,
+                'relation_type': relationType,
+                'relation_entity_id': relationEntityId,
+                'status': status,
+                'task_id': taskId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * 创建生成任务关联
+     * @returns ApiResponse_GenerationTaskLinkRead_ Successful Response
+     * @throws ApiError
+     */
+    public static createTaskLinkApiV1FilmTaskLinksPost({
+        requestBody,
+    }: {
+        requestBody: GenerationTaskLinkCreate,
+    }): CancelablePromise<ApiResponse_GenerationTaskLinkRead_> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/film/task-links',
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * 获取生成任务关联详情
+     * @returns ApiResponse_GenerationTaskLinkRead_ Successful Response
+     * @throws ApiError
+     */
+    public static getTaskLinkApiV1FilmTaskLinksLinkIdGet({
+        linkId,
+    }: {
+        linkId: number,
+    }): CancelablePromise<ApiResponse_GenerationTaskLinkRead_> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/api/v1/film/task-links/{link_id}',
+            path: {
+                'link_id': linkId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * 更新生成任务关联（不支持直接修改 is_adopted）
+     * @returns ApiResponse_GenerationTaskLinkRead_ Successful Response
+     * @throws ApiError
+     */
+    public static updateTaskLinkApiV1FilmTaskLinksLinkIdPatch({
+        linkId,
+        requestBody,
+    }: {
+        linkId: number,
+        requestBody: GenerationTaskLinkUpdate,
+    }): CancelablePromise<ApiResponse_GenerationTaskLinkRead_> {
+        return __request(OpenAPI, {
+            method: 'PATCH',
+            url: '/api/v1/film/task-links/{link_id}',
+            path: {
+                'link_id': linkId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * 删除生成任务关联
+     * @returns ApiResponse_NoneType_ Successful Response
+     * @throws ApiError
+     */
+    public static deleteTaskLinkApiV1FilmTaskLinksLinkIdDelete({
+        linkId,
+    }: {
+        linkId: number,
+    }): CancelablePromise<ApiResponse_NoneType_> {
+        return __request(OpenAPI, {
+            method: 'DELETE',
+            url: '/api/v1/film/task-links/{link_id}',
+            path: {
+                'link_id': linkId,
+            },
             errors: {
                 422: `Validation Error`,
             },

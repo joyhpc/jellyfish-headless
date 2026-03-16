@@ -1,4 +1,3 @@
-import React from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { PlaceholderTab } from './PlaceholderTab'
 import { getProjectEditorPath } from '../routes'
@@ -15,4 +14,3 @@ export function EditTab() {
     />
   )
 }
-

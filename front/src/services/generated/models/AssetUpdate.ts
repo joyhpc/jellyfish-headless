@@ -7,8 +7,8 @@ export type AssetUpdate = {
     chapter_id?: (string | null);
     name?: (string | null);
     description?: (string | null);
-    thumbnail?: (string | null);
     tags?: (Array<string> | null);
     prompt_template_id?: (string | null);
+    view_count?: (number | null);
 };
 

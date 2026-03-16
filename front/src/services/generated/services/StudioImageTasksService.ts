@@ -11,6 +11,9 @@ export class StudioImageTasksService {
     /**
      * 演员形象/立绘图片生成（任务版）
      * 为指定演员形象创建图片生成任务，并通过 `GenerationTaskLink` 关联。
+     *
+     * - path 参数 actor_image_id 表示 ActorImage.id
+     * - body.image_id 必须为该 ActorImage 下的 ActorImageImage.id
      * @returns ApiResponse_TaskCreated_ Successful Response
      * @throws ApiError
      */
@@ -39,6 +42,8 @@ export class StudioImageTasksService {
      * 为道具/场景/服装创建图片生成任务。
      *
      * - asset_type: prop / scene / costume
+     * - path 参数 asset_id 为对应资产 ID
+     * - body.image_id 必须为该资产下对应图片表记录的 ID（PropImage/SceneImage/CostumeImage）
      * @returns ApiResponse_TaskCreated_ Successful Response
      * @throws ApiError
      */
@@ -68,6 +73,9 @@ export class StudioImageTasksService {
     /**
      * 角色图片生成（任务版）
      * 为角色创建图片生成任务（对应 CharacterImage 业务）。
+     *
+     * - path 参数 character_id 为 Character.id
+     * - body.image_id 必须为该角色下的 CharacterImage.id
      * @returns ApiResponse_TaskCreated_ Successful Response
      * @throws ApiError
      */
@@ -95,8 +103,9 @@ export class StudioImageTasksService {
      * 镜头分镜帧图片生成（任务版）
      * 为镜头分镜帧（ShotDetail）创建图片生成任务。
      *
-     * - relation_type 固定为 shot_frame_image
-     * - relation_entity_id 为 ShotDetail.id
+     * - path 参数 shot_detail_id 为 ShotDetail.id
+     * - body.image_id 必须为该分镜下的 ShotFrameImage.id
+     * - relation_type 固定为 shot_frame_image，relation_entity_id 为 ShotFrameImage.id
      * @returns ApiResponse_TaskCreated_ Successful Response
      * @throws ApiError
      */

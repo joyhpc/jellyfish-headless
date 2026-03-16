@@ -8,11 +8,21 @@
 
 from __future__ import annotations
 
+from enum import Enum
+
 from sqlalchemy import Boolean, ForeignKey, Index, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
 from app.models.base import TimestampMixin
+
+
+class GenerationTaskLinkStatus(str, Enum):
+    """生成任务关联状态。"""
+
+    accepted = "accepted"  # 已采用
+    todo = "todo"  # 待操作
+    rejected = "rejected"  # 未采用
 
 
 class GenerationTaskLink(Base, TimestampMixin):
@@ -56,11 +66,11 @@ class GenerationTaskLink(Base, TimestampMixin):
         default="",
         comment="关联业务实体 ID（如具体的 prop/costume/scene/shot 等对象 ID）",
     )
-    is_adopted: Mapped[bool] = mapped_column(
-        Boolean,
+    status: Mapped[GenerationTaskLinkStatus] = mapped_column(
+        String(32),
         nullable=False,
-        default=False,
-        comment="是否采用（业务侧是否已采纳该任务结果）",
+        default=GenerationTaskLinkStatus.todo,
+        comment="关联状态：accepted=已采用、todo=待操作、rejected=未采用",
     )
 
     __table_args__ = (
@@ -82,8 +92,8 @@ class GenerationTaskLink(Base, TimestampMixin):
             "relation_entity_id",
         ),
         Index(
-            "ix_task_link_is_adopted_updated_at",
-            "is_adopted",
+            "ix_task_link_status_updated_at",
+            "status",
             "updated_at",
         ),
     )

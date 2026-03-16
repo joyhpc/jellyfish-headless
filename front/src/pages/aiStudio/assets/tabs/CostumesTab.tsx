@@ -1,4 +1,3 @@
-import React from 'react'
 import { AssetTypeTab } from './AssetTypeTab'
 import { StudioAssetsService } from '../../../../services/generated'
 import type { CostumeRead } from '../../../../services/generated'
@@ -29,14 +28,8 @@ export function CostumesTab() {
       }}
       generateImage={async (assetId) => {
         const url = `https://picsum.photos/seed/costume_${assetId}_${Date.now()}/768/768`
-        const res = await StudioAssetsService.createCostumeImageApiV1StudioAssetsCostumesCostumeIdImagesPost({
-          costumeId: assetId,
-          requestBody: { url, is_primary: true },
-        })
-        if (!res.data) throw new Error('empty costume image')
-        return res.data.url
+        return url
       }}
     />
   )
 }
-

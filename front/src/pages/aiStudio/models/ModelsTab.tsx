@@ -41,7 +41,6 @@ import {
   categoryLabelMap,
   categoryColorMap,
   SORT_OPTIONS,
-  maskUrl,
 } from './constants'
 
 export default function ModelsTab() {

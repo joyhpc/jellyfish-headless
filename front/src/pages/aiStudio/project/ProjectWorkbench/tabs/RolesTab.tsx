@@ -1,4 +1,3 @@
-import React from 'react'
 import { useNavigate } from 'react-router-dom'
 import { PlaceholderTab } from './PlaceholderTab'
 
@@ -13,4 +12,3 @@ export function RolesTab() {
     />
   )
 }
-

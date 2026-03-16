@@ -6,24 +6,33 @@ from __future__ import annotations
 将任务与上层业务实体（演员形象/道具/场景/服装/角色/镜头分镜帧）建立关联。
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.ext.asyncio import AsyncSession
+from enum import Enum
+from typing import Literal
 
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import async_session_maker
 from app.core.task_manager import DeliveryMode, SqlAlchemyTaskStore, TaskManager
 from app.core.task_manager.types import TaskStatus
-from app.core.tasks import ImageGenerationInput, ImageGenerationTask, ProviderConfig
+from app.core.tasks import ImageGenerationInput, ImageGenerationResult, ImageGenerationTask, ProviderConfig
 from app.dependencies import get_db
+from app.utils.files import create_file_from_url_or_b64
 from app.models.llm import Model, ModelCategoryKey, ModelSettings, Provider
 from app.models.studio import (
     ActorImage,
+    ActorImageImage,
     Character,
+    CharacterImage,
     Costume,
+    CostumeImage,
     Prop,
+    PropImage,
     Scene,
+    SceneImage,
     ShotDetail,
+    ShotFrameImage,
 )
 from app.models.task_links import GenerationTaskLink
 from app.schemas.common import ApiResponse, success_response
@@ -34,11 +43,24 @@ router = APIRouter()
 
 
 class StudioImageTaskRequest(BaseModel):
-    """Studio 专用图片任务请求体：可选模型 ID，不传则用默认图片模型；供应商由模型反查。"""
+    """Studio 专用图片任务请求体：可选模型 ID，不传则用默认图片模型；供应商由模型反查。
+
+    image_id 表示具体的图片模型 ID，例如：
+    - 演员形象图片：ActorImageImage.id
+    - 场景图片：SceneImage.id
+    - 道具图片：PropImage.id
+    - 服装图片：CostumeImage.id
+    - 角色图片：CharacterImage.id
+    - 分镜帧图片：ShotFrameImage.id
+    """
 
     model_id: str | None = Field(
         None,
         description="可选模型 ID（models.id）；不传则使用 ModelSettings.default_image_model_id；Provider 由模型关联反查",
+    )
+    image_id: int | None = Field(
+        None,
+        description="图片模型 ID，如 ActorImageImage.id / SceneImage.id / PropImage.id 等；必须与路径主体 ID 匹配",
     )
 
 
@@ -161,6 +183,83 @@ async def _create_image_task_and_link(
     db.add(link)
     await db.commit()
 
+    async def _persist_images_to_assets(
+        session: AsyncSession,
+        *,
+        task_id: str,
+        relation_type: str,
+        relation_entity_id: str,
+        result: ImageGenerationResult,
+    ) -> None:
+        """根据 relation_type 将生成的图片落库为 FileItem + 具体资产图片表。
+
+        - 先将图片内容上传到 S3，创建 FileItem 记录；
+        - 再根据 relation_type 写入 ActorImageImage / SceneImage 等业务图片表；
+        - 当前实现先支持 actor_image / scene_image / prop_image / costume_image，其他类型可按需扩展。
+        """
+        from sqlalchemy import select
+
+        from app.models.studio import (
+            ActorImageImage,
+            CharacterImage,
+            CostumeImage,
+            PropImage,
+            SceneImage,
+            ShotFrameImage,
+        )
+
+        # 目前 ImageGenerationResult.images 优先使用 url；若仅有 b64，可在此扩展为下载/解码再上传。
+        images = result.images or []
+        if not images:
+            return
+
+        # 简化起见：仅处理第一张图片
+        item = images[0]
+        if not item.url:
+            # 暂不支持纯 base64 输出的自动落库
+            return
+
+        # 使用通用工具方法：从 URL 创建 FileItem 并上传到对象存储
+        file_obj = await create_file_from_url_or_b64(
+            session,
+            url=item.url,
+            name=f"{relation_type}-{relation_entity_id}",
+            prefix=f"generated-images/{relation_type}/{relation_entity_id}",
+        )
+        file_id = file_obj.id
+
+        # 根据 relation_type 将生成文件填充到已有 image 槽位的 file_id（仅首张生效）
+        if relation_type == "actor_image_image":
+            image_row = await session.get(ActorImageImage, int(relation_entity_id))
+            if image_row is None or image_row.file_id:
+                return
+            image_row.file_id = file_id
+        elif relation_type == "scene_image":
+            image_row = await session.get(SceneImage, int(relation_entity_id))
+            if image_row is None or image_row.file_id:
+                return
+            image_row.file_id = file_id
+        elif relation_type == "prop_image":
+            image_row = await session.get(PropImage, int(relation_entity_id))
+            if image_row is None or image_row.file_id:
+                return
+            image_row.file_id = file_id
+        elif relation_type == "costume_image":
+            image_row = await session.get(CostumeImage, int(relation_entity_id))
+            if image_row is None or image_row.file_id:
+                return
+            image_row.file_id = file_id
+        elif relation_type == "character_image":
+            image_row = await session.get(CharacterImage, int(relation_entity_id))
+            if image_row is None or image_row.file_id:
+                return
+            image_row.file_id = file_id
+        elif relation_type == "shot_frame_image":
+            image_row = await session.get(ShotFrameImage, int(relation_entity_id))
+            if image_row is None or image_row.file_id:
+                return
+            image_row.file_id = file_id
+
     async def _runner(task_id: str, args: dict) -> None:
         async with async_session_maker() as session:
             try:
@@ -187,6 +286,14 @@ async def _create_image_task_and_link(
                     raise RuntimeError("Image generation task returned no result")
 
                 await store2.set_result(task_id, result.model_dump())
+                # 任务成功后，自动将生成图片上传到 S3 并落库到资产图片表
+                await _persist_images_to_assets(
+                    session,
+                    task_id=task_id,
+                    relation_type=relation_type,
+                    relation_entity_id=relation_entity_id,
+                    result=result,
+                )
                 await store2.set_progress(task_id, 100)
                 await store2.set_status(task_id, TaskStatus.succeeded)
                 await session.commit()
@@ -215,16 +322,31 @@ async def create_actor_image_generation_task(
     body: StudioImageTaskRequest,
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[TaskCreated]:
-    """为指定演员形象创建图片生成任务，并通过 `GenerationTaskLink` 关联。"""
+    """为指定演员形象创建图片生成任务，并通过 `GenerationTaskLink` 关联。
+
+    - path 参数 actor_image_id 表示 ActorImage.id
+    - body.image_id 必须为该 ActorImage 下的 ActorImageImage.id
+    """
     actor_image = await db.get(ActorImage, actor_image_id)
     if actor_image is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ActorImage not found")
+    if body.image_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="image_id is required for actor image generation",
+        )
+    image_row = await db.get(ActorImageImage, body.image_id)
+    if image_row is None or image_row.actor_image_id != actor_image_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="image_id does not belong to given actor_image_id",
+        )
     prompt = _prompt_from_description(actor_image.description, not_found_msg="ActorImage.description is empty")
     created = await _create_image_task_and_link(
         db=db,
         model_id=body.model_id,
-        relation_type="actor_image",
-        relation_entity_id=actor_image_id,
+        relation_type="actor_image_image",
+        relation_entity_id=str(image_row.id),
         prompt=prompt,
     )
     return success_response(created, code=201)
@@ -245,24 +367,50 @@ async def create_asset_image_generation_task(
     """为道具/场景/服装创建图片生成任务。
 
     - asset_type: prop / scene / costume
+    - path 参数 asset_id 为对应资产 ID
+    - body.image_id 必须为该资产下对应图片表记录的 ID（PropImage/SceneImage/CostumeImage）
     """
+    if body.image_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="image_id is required for asset image generation",
+        )
+
     asset_type_norm = asset_type.strip().lower()
     if asset_type_norm == "prop":
         asset = await db.get(Prop, asset_id)
         if asset is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Prop not found")
+        image_row = await db.get(PropImage, body.image_id)
+        if image_row is None or image_row.prop_id != asset_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="image_id does not belong to given prop_id",
+            )
         relation_type = "prop_image"
         prompt = _prompt_from_description(asset.description, not_found_msg="Prop.description is empty")
     elif asset_type_norm == "scene":
         asset = await db.get(Scene, asset_id)
         if asset is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scene not found")
+        image_row = await db.get(SceneImage, body.image_id)
+        if image_row is None or image_row.scene_id != asset_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="image_id does not belong to given scene_id",
+            )
         relation_type = "scene_image"
         prompt = _prompt_from_description(asset.description, not_found_msg="Scene.description is empty")
     elif asset_type_norm == "costume":
         asset = await db.get(Costume, asset_id)
         if asset is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Costume not found")
+        image_row = await db.get(CostumeImage, body.image_id)
+        if image_row is None or image_row.costume_id != asset_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="image_id does not belong to given costume_id",
+            )
         relation_type = "costume_image"
         prompt = _prompt_from_description(asset.description, not_found_msg="Costume.description is empty")
     else:
@@ -275,7 +423,7 @@ async def create_asset_image_generation_task(
         db=db,
         model_id=body.model_id,
         relation_type=relation_type,
-        relation_entity_id=asset_id,
+        relation_entity_id=str(body.image_id),
         prompt=prompt,
     )
     return success_response(created, code=201)
@@ -292,16 +440,31 @@ async def create_character_image_generation_task(
     body: StudioImageTaskRequest,
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[TaskCreated]:
-    """为角色创建图片生成任务（对应 CharacterImage 业务）。"""
+    """为角色创建图片生成任务（对应 CharacterImage 业务）。
+
+    - path 参数 character_id 为 Character.id
+    - body.image_id 必须为该角色下的 CharacterImage.id
+    """
     character = await db.get(Character, character_id)
     if character is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Character not found")
+    if body.image_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="image_id is required for character image generation",
+        )
+    image_row = await db.get(CharacterImage, body.image_id)
+    if image_row is None or image_row.character_id != character_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="image_id does not belong to given character_id",
+        )
     prompt = _prompt_from_description(character.description, not_found_msg="Character.description is empty")
     created = await _create_image_task_and_link(
         db=db,
         model_id=body.model_id,
         relation_type="character_image",
-        relation_entity_id=character_id,
+        relation_entity_id=str(image_row.id),
         prompt=prompt,
     )
     return success_response(created, code=201)
@@ -320,12 +483,24 @@ async def create_shot_frame_image_generation_task(
 ) -> ApiResponse[TaskCreated]:
     """为镜头分镜帧（ShotDetail）创建图片生成任务。
 
-    - relation_type 固定为 shot_frame_image
-    - relation_entity_id 为 ShotDetail.id
+    - path 参数 shot_detail_id 为 ShotDetail.id
+    - body.image_id 必须为该分镜下的 ShotFrameImage.id
+    - relation_type 固定为 shot_frame_image，relation_entity_id 为 ShotFrameImage.id
     """
     shot_detail = await db.get(ShotDetail, shot_detail_id)
     if shot_detail is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ShotDetail not found")
+    if body.image_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="image_id is required for shot frame image generation",
+        )
+    image_row = await db.get(ShotFrameImage, body.image_id)
+    if image_row is None or image_row.shot_detail_id != shot_detail_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="image_id does not belong to given shot_detail_id",
+        )
     # ShotDetail 无 description：默认优先 key_frame_prompt，其次 first/last。
     prompt = (
         (shot_detail.key_frame_prompt or "").strip()
@@ -341,7 +516,7 @@ async def create_shot_frame_image_generation_task(
         db=db,
         model_id=body.model_id,
         relation_type="shot_frame_image",
-        relation_entity_id=shot_detail_id,
+        relation_entity_id=str(image_row.id),
         prompt=prompt,
     )
     return success_response(created, code=201)

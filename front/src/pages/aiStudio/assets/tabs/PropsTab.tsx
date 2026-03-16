@@ -1,4 +1,3 @@
-import React from 'react'
 import { AssetTypeTab } from './AssetTypeTab'
 import { StudioAssetsService } from '../../../../services/generated'
 import type { PropRead } from '../../../../services/generated'
@@ -29,14 +28,8 @@ export function PropsTab() {
       }}
       generateImage={async (assetId) => {
         const url = `https://picsum.photos/seed/prop_${assetId}_${Date.now()}/768/768`
-        const res = await StudioAssetsService.createPropImageApiV1StudioAssetsPropsPropIdImagesPost({
-          propId: assetId,
-          requestBody: { url, is_primary: true },
-        })
-        if (!res.data) throw new Error('empty prop image')
-        return res.data.url
+        return url
       }}
     />
   )
 }
-

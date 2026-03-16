@@ -8,8 +8,8 @@ export type AssetCreate = {
     chapter_id?: (string | null);
     name: string;
     description?: string;
-    thumbnail?: string;
     tags?: Array<string>;
     prompt_template_id?: (string | null);
+    view_count?: number;
 };
 

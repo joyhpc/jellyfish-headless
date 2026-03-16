@@ -13,9 +13,9 @@ class AssetBase(BaseModel):
     chapter_id: str | None = Field(None, description="归属章节 ID（可空）")
     name: str = Field(..., description="名称")
     description: str = Field("", description="描述")
-    thumbnail: str = Field("", description="缩略图 URL")
     tags: list[str] = Field(default_factory=list, description="标签")
     prompt_template_id: str | None = Field(None, description="提示词模板 ID（可空）")
+    view_count: int = Field(1, ge=1, description="计划为该资产生成的视角图片数量（不含分镜帧）")
 
 
 class AssetCreate(BaseModel):
@@ -24,9 +24,9 @@ class AssetCreate(BaseModel):
     chapter_id: str | None = None
     name: str
     description: str = ""
-    thumbnail: str = ""
     tags: list[str] = Field(default_factory=list)
     prompt_template_id: str | None = None
+    view_count: int = Field(1, ge=1)
 
 
 class AssetUpdate(BaseModel):
@@ -34,12 +34,14 @@ class AssetUpdate(BaseModel):
     chapter_id: str | None = None
     name: str | None = None
     description: str | None = None
-    thumbnail: str | None = None
     tags: list[str] | None = None
     prompt_template_id: str | None = None
+    view_count: int | None = Field(None, ge=1)
 
 
 class AssetRead(AssetBase):
+    thumbnail: str = Field("", description="缩略图下载地址")
+
     class Config:
         from_attributes = True
 
@@ -48,21 +50,19 @@ class AssetImageBase(BaseModel):
     id: int = Field(..., description="图片行 ID")
     quality_level: AssetQualityLevel = Field(AssetQualityLevel.low, description="精度等级")
     view_angle: AssetViewAngle = Field(AssetViewAngle.front, description="视角")
-    file_id: str = Field(..., description="关联的 FileItem ID")
+    file_id: str | None = Field(None, description="关联的 FileItem ID（可空，支持先创建槽位后填充）")
     width: int | None = Field(None, description="宽(px)")
     height: int | None = Field(None, description="高(px)")
     format: str = Field("png", description="格式")
-    is_primary: bool = Field(False, description="是否主图")
 
 
 class AssetImageCreate(BaseModel):
     quality_level: AssetQualityLevel = AssetQualityLevel.low
     view_angle: AssetViewAngle = AssetViewAngle.front
-    file_id: str
+    file_id: str | None = None
     width: int | None = None
     height: int | None = None
     format: str = "png"
-    is_primary: bool = False
 
 
 class AssetImageUpdate(BaseModel):
@@ -72,7 +72,6 @@ class AssetImageUpdate(BaseModel):
     width: int | None = None
     height: int | None = None
     format: str | None = None
-    is_primary: bool | None = None
 
 
 class ActorImageRead(AssetRead):

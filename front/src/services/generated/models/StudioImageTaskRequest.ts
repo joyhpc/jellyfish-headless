@@ -4,11 +4,23 @@
 /* eslint-disable */
 /**
  * Studio 专用图片任务请求体：可选模型 ID，不传则用默认图片模型；供应商由模型反查。
+ *
+ * image_id 表示具体的图片模型 ID，例如：
+ * - 演员形象图片：ActorImageImage.id
+ * - 场景图片：SceneImage.id
+ * - 道具图片：PropImage.id
+ * - 服装图片：CostumeImage.id
+ * - 角色图片：CharacterImage.id
+ * - 分镜帧图片：ShotFrameImage.id
  */
 export type StudioImageTaskRequest = {
     /**
      * 可选模型 ID（models.id）；不传则使用 ModelSettings.default_image_model_id；Provider 由模型关联反查
      */
     model_id?: (string | null);
+    /**
+     * 图片模型 ID，如 ActorImageImage.id / SceneImage.id / PropImage.id 等；必须与路径主体 ID 匹配
+     */
+    image_id?: (number | null);
 };
 

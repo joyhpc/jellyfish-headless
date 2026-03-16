@@ -25,7 +25,7 @@ class GenerationTaskLinkBase(BaseModel):
     resource_type: str = Field(..., description="生成资源类型（如 image/video/text/task_link）")
     relation_type: str = Field(..., description="业务类型（如 prop/costume/scene 等）")
     relation_entity_id: str = Field(..., description="关联业务实体 ID")
-    is_adopted: bool = Field(..., description="是否采用（业务侧是否已采纳该任务结果）")
+    status: str = Field(..., description="关联状态：accepted=已采用、todo=待操作、rejected=未采用")
 
 
 class GenerationTaskLinkCreate(BaseModel):
@@ -35,7 +35,7 @@ class GenerationTaskLinkCreate(BaseModel):
     resource_type: str = Field(..., description="生成资源类型（如 image/video/text/task_link）")
     relation_type: str = Field(..., description="业务类型（如 prop/costume/scene 等）")
     relation_entity_id: str = Field(..., description="关联业务实体 ID")
-    is_adopted: bool = Field(False, description="是否采用，默认 False。正向更新建议使用专用接口。")
+    status: str = Field("todo", description="关联状态：accepted=已采用、todo=待操作、rejected=未采用；默认 todo")
 
 
 class GenerationTaskLinkUpdate(BaseModel):
@@ -44,6 +44,7 @@ class GenerationTaskLinkUpdate(BaseModel):
     resource_type: str | None = Field(None, description="生成资源类型（如 image/video/text/task_link）")
     relation_type: str | None = Field(None, description="业务类型（如 prop/costume/scene 等）")
     relation_entity_id: str | None = Field(None, description="关联业务实体 ID")
+    status: str | None = Field(None, description="关联状态：accepted=已采用、todo=待操作、rejected=未采用")
 
 
 class GenerationTaskLinkRead(GenerationTaskLinkBase):
@@ -98,7 +99,7 @@ async def get_task_result(
     "/task-links/adopt",
     response_model=ApiResponse[TaskLinkAdoptRead],
     summary="更新任务关联的采用状态（仅可正向变更）",
-    description="将指定任务链接的 is_adopted 设为 true；已采用不可改为未采用。",
+    description="将指定任务链接的状态设为 accepted；已采用不可改为未采用。",
 )
 async def adopt_task_link(
     body: TaskLinkAdoptRequest,
@@ -117,13 +118,15 @@ async def adopt_task_link(
     if link is None:
         raise HTTPException(status_code=404, detail="Task link not found")
 
-    if link.is_adopted:
+    if str(link.status) == "accepted":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="状态只可正向变更，已采用不可改为未采用",
         )
 
-    link.is_adopted = True
+    from app.models.task_links import GenerationTaskLinkStatus
+
+    link.status = GenerationTaskLinkStatus.accepted
     await db.flush()
 
     return success_response(
@@ -146,7 +149,7 @@ async def list_task_links(
     resource_type: str | None = Query(None, description="按 resource_type 过滤"),
     relation_type: str | None = Query(None, description="按 relation_type 过滤"),
     relation_entity_id: str | None = Query(None, description="按 relation_entity_id 过滤"),
-    is_adopted: bool | None = Query(None, description="按是否采用过滤"),
+    status: str | None = Query(None, description="按关联状态过滤（accepted/todo/rejected）"),
     task_id: str | None = Query(None, description="按 task_id 过滤"),
 ) -> ApiResponse[list[GenerationTaskLinkRead]]:
     stmt = select(GenerationTaskLink)
@@ -156,8 +159,8 @@ async def list_task_links(
         stmt = stmt.where(GenerationTaskLink.relation_type == relation_type)
     if relation_entity_id is not None:
         stmt = stmt.where(GenerationTaskLink.relation_entity_id == relation_entity_id)
-    if is_adopted is not None:
-        stmt = stmt.where(GenerationTaskLink.is_adopted == is_adopted)
+    if status is not None:
+        stmt = stmt.where(GenerationTaskLink.status == status)
     if task_id is not None:
         stmt = stmt.where(GenerationTaskLink.task_id == task_id)
 
@@ -181,7 +184,7 @@ async def create_task_link(
         resource_type=body.resource_type,
         relation_type=body.relation_type,
         relation_entity_id=body.relation_entity_id,
-        is_adopted=body.is_adopted,
+        status=body.status,
     )
     db.add(link)
     await db.flush()

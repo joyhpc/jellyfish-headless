@@ -10,6 +10,7 @@ from app.api.utils import apply_keyword_filter, apply_order, paginate
 from app.dependencies import get_db
 from app.models.studio import (
     Actor,
+    AssetViewAngle,
     Chapter,
     Character,
     CharacterImage,
@@ -43,6 +44,7 @@ ACTOR_ORDER_FIELDS = {"name", "created_at", "updated_at"}
 CHARACTER_ORDER_FIELDS = {"name", "created_at", "updated_at"}
 LINK_ORDER_FIELDS = {"index", "id", "created_at", "updated_at"}
 IMAGE_ORDER_FIELDS = {"id", "quality_level", "view_angle", "created_at", "updated_at"}
+DOWNLOAD_URL_TEMPLATE = "/api/v1/studio/files/{file_id}/download"
 
 
 async def _ensure_project_exists(db: AsyncSession, project_id: str) -> None:
@@ -85,6 +87,43 @@ async def _ensure_single_primary_character_image(
         stmt = stmt.where(CharacterImage.id != keep_id)
     stmt = stmt.values(is_primary=False)
     await db.execute(stmt)
+
+
+def _download_url(file_id: str) -> str:
+    return DOWNLOAD_URL_TEMPLATE.format(file_id=file_id)
+
+
+async def _resolve_character_thumbnails(
+    db: AsyncSession,
+    *,
+    character_ids: list[str],
+) -> dict[str, str]:
+    if not character_ids:
+        return {}
+
+    stmt = select(CharacterImage).where(
+        CharacterImage.character_id.in_(character_ids),
+        CharacterImage.file_id.is_not(None),
+    )
+    result = await db.execute(stmt)
+    rows = result.scalars().all()
+
+    best: dict[str, tuple[int, int, int, str]] = {}
+    for row in rows:
+        file_id = row.file_id
+        if not file_id:
+            continue
+        created_ts = int(row.created_at.timestamp()) if row.created_at else -1
+        score = (
+            1 if row.view_angle == AssetViewAngle.front else 0,
+            created_ts,
+            row.id,
+        )
+        current = best.get(row.character_id)
+        if current is None or score > current[:3]:
+            best[row.character_id] = (*score, file_id)
+
+    return {character_id: _download_url(score[3]) for character_id, score in best.items()}
 
 
 # ---------- Actor ----------
@@ -213,7 +252,12 @@ async def list_characters(
     stmt = apply_keyword_filter(stmt, q=q, fields=[Character.name, Character.description])
     stmt = apply_order(stmt, model=Character, order=order, is_desc=is_desc, allow_fields=CHARACTER_ORDER_FIELDS, default="created_at")
     items, total = await paginate(db, stmt=stmt, page=page, page_size=page_size)
-    return paginated_response([CharacterRead.model_validate(x) for x in items], page=page, page_size=page_size, total=total)
+    thumbnails = await _resolve_character_thumbnails(db, character_ids=[x.id for x in items])
+    payload = [
+        CharacterRead.model_validate(x).model_copy(update={"thumbnail": thumbnails.get(x.id, "")})
+        for x in items
+    ]
+    return paginated_response(payload, page=page, page_size=page_size, total=total)
 
 
 @router.post(

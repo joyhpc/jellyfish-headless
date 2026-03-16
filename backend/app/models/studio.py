@@ -305,7 +305,12 @@ class ActorImage(Base, TimestampMixin):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False, comment="名称")
     description: Mapped[str] = mapped_column(Text, nullable=False, default="", comment="描述")
-    thumbnail: Mapped[str] = mapped_column(String(1024), nullable=False, default="", comment="缩略图 URL")
+    view_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=1,
+        comment="计划为该演员形象生成的视角图片数量（不含分镜帧）",
+    )
     tags: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list, comment="标签")
     prompt_template_id: Mapped[str | None] = mapped_column(
         String(64),
@@ -358,7 +363,12 @@ class Scene(Base, TimestampMixin):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False, comment="名称")
     description: Mapped[str] = mapped_column(Text, nullable=False, default="", comment="描述")
-    thumbnail: Mapped[str] = mapped_column(String(1024), nullable=False, default="", comment="缩略图 URL")
+    view_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=1,
+        comment="计划为该场景生成的视角图片数量（不含分镜帧）",
+    )
     tags: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list, comment="标签")
     prompt_template_id: Mapped[str | None] = mapped_column(
         String(64),
@@ -411,7 +421,12 @@ class Prop(Base, TimestampMixin):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False, comment="名称")
     description: Mapped[str] = mapped_column(Text, nullable=False, default="", comment="描述")
-    thumbnail: Mapped[str] = mapped_column(String(1024), nullable=False, default="", comment="缩略图 URL")
+    view_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=1,
+        comment="计划为该道具生成的视角图片数量（不含分镜帧）",
+    )
     tags: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list, comment="标签")
     prompt_template_id: Mapped[str | None] = mapped_column(
         String(64),
@@ -469,7 +484,12 @@ class Costume(Base, TimestampMixin):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False, comment="名称")
     description: Mapped[str] = mapped_column(Text, nullable=False, default="", comment="描述")
-    thumbnail: Mapped[str] = mapped_column(String(1024), nullable=False, default="", comment="缩略图 URL")
+    view_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=1,
+        comment="计划为该服装生成的视角图片数量（不含分镜帧）",
+    )
     tags: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list, comment="标签")
     prompt_template_id: Mapped[str | None] = mapped_column(
         String(64),
@@ -638,6 +658,18 @@ class ShotDetail(Base,TimestampMixin):
         comment="视效类型（存 code；展示可用 schemas.VFX_TYPE_ZH）",
     )
     vfx_note: Mapped[str] = mapped_column(Text, nullable=False, default="", comment="视效说明（简短可执行）")
+    description: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="",
+        comment="分镜整体描述（用于提示词补充）",
+    )
+    prompt_template_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("prompt_templates.id", ondelete="SET NULL"),
+        nullable=True,
+        comment="分镜提示词模板 ID（可选）",
+    )
     first_frame_prompt: Mapped[str] = mapped_column(
         Text, nullable=False, default="", comment="镜头分镜首帧提示词",
     )
@@ -663,9 +695,12 @@ class ShotDetail(Base,TimestampMixin):
         order_by="ShotDialogLine.index",
     )
 
+    prompt_template: Mapped["PromptTemplate | None"] = relationship()
+
     __table_args__ = (
         Index("ix_shot_details_camera_shot", "camera_shot"),
         Index("ix_shot_details_angle", "angle"),
+        Index("ix_shot_details_prompt_template_id", "prompt_template_id"),
     )
 
 
@@ -1010,12 +1045,12 @@ class ActorImageImage(Base, TimestampMixin):
         index=True,
         comment="所属演员形象 ID",
     )
-    file_id: Mapped[str] = mapped_column(
+    file_id: Mapped[str | None] = mapped_column(
         String(64),
         ForeignKey("files.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
         index=True,
-        comment="关联的文件 ID（FileItem）",
+        comment="关联的文件 ID（FileItem，可空，支持先创建槽位后填充）",
     )
     quality_level: Mapped[AssetQualityLevel] = mapped_column(
         String(16),
@@ -1034,12 +1069,6 @@ class ActorImageImage(Base, TimestampMixin):
     width: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="宽（px）")
     height: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="高（px）")
     format: Mapped[str] = mapped_column(String(32), nullable=False, default="png", comment="格式")
-    is_primary: Mapped[bool] = mapped_column(
-        Boolean,
-        nullable=False,
-        default=False,
-        comment="是否主图；应用层需保证同一演员形象下至多一张主图",
-    )
 
     actor_image: Mapped["ActorImage"] = relationship(back_populates="images")
 
@@ -1065,24 +1094,30 @@ class SceneImage(Base, TimestampMixin):
         index=True,
         comment="所属场景 ID",
     )
-    file_id: Mapped[str] = mapped_column(
+    file_id: Mapped[str | None] = mapped_column(
         String(64),
         ForeignKey("files.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
         index=True,
-        comment="关联的文件 ID（FileItem）",
+        comment="关联的文件 ID（FileItem，可空，支持先创建槽位后填充）",
     )
-    quality_level: Mapped[AssetQualityLevel] = mapped_column(String(16), nullable=False, default=AssetQualityLevel.low, index=True, comment="精度等级")
-    view_angle: Mapped[AssetViewAngle] = mapped_column(String(32), nullable=False, default=AssetViewAngle.front, index=True, comment="视角")
+    quality_level: Mapped[AssetQualityLevel] = mapped_column(
+        String(16),
+        nullable=False,
+        default=AssetQualityLevel.low,
+        index=True,
+        comment="精度等级",
+    )
+    view_angle: Mapped[AssetViewAngle] = mapped_column(
+        String(32),
+        nullable=False,
+        default=AssetViewAngle.front,
+        index=True,
+        comment="视角",
+    )
     width: Mapped[int | None] = mapped_column(Integer, nullable=True)
     height: Mapped[int | None] = mapped_column(Integer, nullable=True)
     format: Mapped[str] = mapped_column(String(32), nullable=False, default="png")
-    is_primary: Mapped[bool] = mapped_column(
-        Boolean,
-        nullable=False,
-        default=False,
-        comment="是否主图；应用层需保证同一场景下至多一张主图",
-    )
 
     scene: Mapped["Scene"] = relationship(back_populates="images")
 
@@ -1108,24 +1143,28 @@ class PropImage(Base, TimestampMixin):
         index=True,
         comment="所属道具 ID",
     )
-    file_id: Mapped[str] = mapped_column(
+    file_id: Mapped[str | None] = mapped_column(
         String(64),
         ForeignKey("files.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
         index=True,
-        comment="关联的文件 ID（FileItem）",
+        comment="关联的文件 ID（FileItem，可空，支持先创建槽位后填充）",
     )
-    quality_level: Mapped[AssetQualityLevel] = mapped_column(String(16), nullable=False, default=AssetQualityLevel.low, index=True)
-    view_angle: Mapped[AssetViewAngle] = mapped_column(String(32), nullable=False, default=AssetViewAngle.front, index=True)
+    quality_level: Mapped[AssetQualityLevel] = mapped_column(
+        String(16),
+        nullable=False,
+        default=AssetQualityLevel.low,
+        index=True,
+    )
+    view_angle: Mapped[AssetViewAngle] = mapped_column(
+        String(32),
+        nullable=False,
+        default=AssetViewAngle.front,
+        index=True,
+    )
     width: Mapped[int | None] = mapped_column(Integer, nullable=True)
     height: Mapped[int | None] = mapped_column(Integer, nullable=True)
     format: Mapped[str] = mapped_column(String(32), nullable=False, default="png")
-    is_primary: Mapped[bool] = mapped_column(
-        Boolean,
-        nullable=False,
-        default=False,
-        comment="是否主图；应用层需保证同一道具下至多一张主图",
-    )
 
     prop: Mapped["Prop"] = relationship(back_populates="images")
 
@@ -1151,24 +1190,28 @@ class CostumeImage(Base, TimestampMixin):
         index=True,
         comment="所属服装 ID",
     )
-    file_id: Mapped[str] = mapped_column(
+    file_id: Mapped[str | None] = mapped_column(
         String(64),
         ForeignKey("files.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
         index=True,
-        comment="关联的文件 ID（FileItem）",
+        comment="关联的文件 ID（FileItem，可空，支持先创建槽位后填充）",
     )
-    quality_level: Mapped[AssetQualityLevel] = mapped_column(String(16), nullable=False, default=AssetQualityLevel.low, index=True)
-    view_angle: Mapped[AssetViewAngle] = mapped_column(String(32), nullable=False, default=AssetViewAngle.front, index=True)
+    quality_level: Mapped[AssetQualityLevel] = mapped_column(
+        String(16),
+        nullable=False,
+        default=AssetQualityLevel.low,
+        index=True,
+    )
+    view_angle: Mapped[AssetViewAngle] = mapped_column(
+        String(32),
+        nullable=False,
+        default=AssetViewAngle.front,
+        index=True,
+    )
     width: Mapped[int | None] = mapped_column(Integer, nullable=True)
     height: Mapped[int | None] = mapped_column(Integer, nullable=True)
     format: Mapped[str] = mapped_column(String(32), nullable=False, default="png")
-    is_primary: Mapped[bool] = mapped_column(
-        Boolean,
-        nullable=False,
-        default=False,
-        comment="是否主图；应用层需保证同一服装下至多一张主图",
-    )
 
     costume: Mapped["Costume"] = relationship(back_populates="images")
 

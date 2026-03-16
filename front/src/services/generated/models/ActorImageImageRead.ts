@@ -18,9 +18,9 @@ export type ActorImageImageRead = {
      */
     view_angle?: AssetViewAngle;
     /**
-     * 关联的 FileItem ID
+     * 关联的 FileItem ID（可空，支持先创建槽位后填充）
      */
-    file_id: string;
+    file_id?: (string | null);
     /**
      * 宽(px)
      */
@@ -33,10 +33,6 @@ export type ActorImageImageRead = {
      * 格式
      */
     format?: string;
-    /**
-     * 是否主图
-     */
-    is_primary?: boolean;
     actor_image_id: string;
 };
 

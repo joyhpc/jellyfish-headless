@@ -27,5 +27,9 @@ export type CharacterRead = {
      * 服装 ID（可空）
      */
     costume_id?: (string | null);
+    /**
+     * 缩略图下载地址
+     */
+    thumbnail?: string;
 };
 

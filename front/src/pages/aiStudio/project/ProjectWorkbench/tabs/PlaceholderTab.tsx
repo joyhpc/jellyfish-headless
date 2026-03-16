@@ -1,4 +1,3 @@
-import React from 'react'
 import { Card, Empty, Button } from 'antd'
 
 export function PlaceholderTab({
@@ -29,4 +28,3 @@ export function PlaceholderTab({
     </Card>
   )
 }
-

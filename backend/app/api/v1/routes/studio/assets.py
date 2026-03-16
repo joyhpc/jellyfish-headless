@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 
 from app.api.utils import apply_keyword_filter, apply_order, paginate
 from app.dependencies import get_db
 from app.models.studio import (
     ActorImage,
     ActorImageImage,
+    AssetViewAngle,
     Costume,
     CostumeImage,
     Prop,
@@ -40,22 +40,13 @@ router = APIRouter()
 ASSET_ORDER_FIELDS = {"name", "created_at", "updated_at"}
 IMAGE_ORDER_FIELDS = {"id", "quality_level", "view_angle", "created_at", "updated_at"}
 
-
-async def _ensure_single_primary(
-    db: AsyncSession,
-    *,
-    table: type,
-    parent_field: str,
-    parent_id: str,
-    keep_id: int | None,
-) -> None:
-    """同一父实体下只允许一张主图：把其他行 is_primary 置 false。"""
-    parent_col = getattr(table, parent_field)
-    stmt = update(table).where(parent_col == parent_id)
-    if keep_id is not None:
-        stmt = stmt.where(table.id != keep_id)
-    stmt = stmt.values(is_primary=False)
-    await db.execute(stmt)
+DEFAULT_VIEW_ANGLES: tuple[AssetViewAngle, ...] = (
+    AssetViewAngle.front,
+    AssetViewAngle.left,
+    AssetViewAngle.right,
+    AssetViewAngle.back,
+)
+DOWNLOAD_URL_TEMPLATE = "/api/v1/studio/files/{file_id}/download"
 
 
 def _asset_list_stmt(model: type, *, project_id: str | None, chapter_id: str | None):
@@ -65,6 +56,53 @@ def _asset_list_stmt(model: type, *, project_id: str | None, chapter_id: str | N
     if chapter_id is not None:
         stmt = stmt.where(model.chapter_id == chapter_id)
     return stmt
+
+
+def _default_view_angles(limit: int) -> list[AssetViewAngle]:
+    if limit <= 0:
+        return []
+    return list(DEFAULT_VIEW_ANGLES[: min(limit, len(DEFAULT_VIEW_ANGLES))])
+
+
+def _download_url(file_id: str) -> str:
+    return DOWNLOAD_URL_TEMPLATE.format(file_id=file_id)
+
+
+async def _resolve_asset_thumbnails(
+    db: AsyncSession,
+    *,
+    image_model: type,
+    parent_field_name: str,
+    parent_ids: list[str],
+) -> dict[str, str]:
+    if not parent_ids:
+        return {}
+
+    parent_field = getattr(image_model, parent_field_name)
+    stmt = select(image_model).where(
+        parent_field.in_(parent_ids),
+        image_model.file_id.is_not(None),
+    )
+    result = await db.execute(stmt)
+    rows = result.scalars().all()
+
+    best: dict[str, tuple[int, int, int, str]] = {}
+    for row in rows:
+        file_id = row.file_id
+        if not file_id:
+            continue
+        parent_id = getattr(row, parent_field_name)
+        created_ts = int(row.created_at.timestamp()) if row.created_at else -1
+        score = (
+            1 if row.view_angle == AssetViewAngle.front else 0,
+            created_ts,
+            row.id,
+        )
+        current = best.get(parent_id)
+        if current is None or score > current[:3]:
+            best[parent_id] = (*score, file_id)
+
+    return {parent_id: _download_url(score[3]) for parent_id, score in best.items()}
 
 
 # ---------- ActorImage ----------
@@ -89,7 +127,17 @@ async def list_actor_images(
     stmt = apply_keyword_filter(stmt, q=q, fields=[ActorImage.name, ActorImage.description])
     stmt = apply_order(stmt, model=ActorImage, order=order, is_desc=is_desc, allow_fields=ASSET_ORDER_FIELDS, default="created_at")
     items, total = await paginate(db, stmt=stmt, page=page, page_size=page_size)
-    return paginated_response([ActorImageRead.model_validate(x) for x in items], page=page, page_size=page_size, total=total)
+    thumbnails = await _resolve_asset_thumbnails(
+        db,
+        image_model=ActorImageImage,
+        parent_field_name="actor_image_id",
+        parent_ids=[x.id for x in items],
+    )
+    payload = [
+        ActorImageRead.model_validate(x).model_copy(update={"thumbnail": thumbnails.get(x.id, "")})
+        for x in items
+    ]
+    return paginated_response(payload, page=page, page_size=page_size, total=total)
 
 
 @router.post(
@@ -105,10 +153,23 @@ async def create_actor_image(
     exists = await db.get(ActorImage, body.id)
     if exists is not None:
         raise HTTPException(status_code=400, detail=f"ActorImage with id={body.id} already exists")
+
     obj = ActorImage(**body.model_dump())
     db.add(obj)
     await db.flush()
     await db.refresh(obj)
+
+    angles = _default_view_angles(body.view_count)
+    for angle in angles:
+        db.add(
+            ActorImageImage(
+                actor_image_id=obj.id,
+                view_angle=angle,
+            )
+        )
+    if angles:
+        await db.flush()
+
     return success_response(ActorImageRead.model_validate(obj), code=201)
 
 
@@ -204,9 +265,6 @@ async def create_actor_image_image(
     db.add(obj)
     await db.flush()
     await db.refresh(obj)
-    if obj.is_primary:
-        await _ensure_single_primary(db, table=ActorImageImage, parent_field="actor_image_id", parent_id=actor_image_id, keep_id=obj.id)
-        await db.refresh(obj)
     return success_response(ActorImageImageRead.model_validate(obj), code=201)
 
 
@@ -229,9 +287,6 @@ async def update_actor_image_image(
         setattr(obj, k, v)
     await db.flush()
     await db.refresh(obj)
-    if update_data.get("is_primary") is True:
-        await _ensure_single_primary(db, table=ActorImageImage, parent_field="actor_image_id", parent_id=actor_image_id, keep_id=obj.id)
-        await db.refresh(obj)
     return success_response(ActorImageImageRead.model_validate(obj))
 
 
@@ -275,7 +330,17 @@ async def list_scenes(
     stmt = apply_keyword_filter(stmt, q=q, fields=[Scene.name, Scene.description])
     stmt = apply_order(stmt, model=Scene, order=order, is_desc=is_desc, allow_fields=ASSET_ORDER_FIELDS, default="created_at")
     items, total = await paginate(db, stmt=stmt, page=page, page_size=page_size)
-    return paginated_response([SceneRead.model_validate(x) for x in items], page=page, page_size=page_size, total=total)
+    thumbnails = await _resolve_asset_thumbnails(
+        db,
+        image_model=SceneImage,
+        parent_field_name="scene_id",
+        parent_ids=[x.id for x in items],
+    )
+    payload = [
+        SceneRead.model_validate(x).model_copy(update={"thumbnail": thumbnails.get(x.id, "")})
+        for x in items
+    ]
+    return paginated_response(payload, page=page, page_size=page_size, total=total)
 
 
 @router.post(
@@ -291,10 +356,23 @@ async def create_scene(
     exists = await db.get(Scene, body.id)
     if exists is not None:
         raise HTTPException(status_code=400, detail=f"Scene with id={body.id} already exists")
+
     obj = Scene(**body.model_dump())
     db.add(obj)
     await db.flush()
     await db.refresh(obj)
+
+    angles = _default_view_angles(body.view_count)
+    for angle in angles:
+        db.add(
+            SceneImage(
+                scene_id=obj.id,
+                view_angle=angle,
+            )
+        )
+    if angles:
+        await db.flush()
+
     return success_response(SceneRead.model_validate(obj), code=201)
 
 
@@ -387,9 +465,6 @@ async def create_scene_image(
     db.add(obj)
     await db.flush()
     await db.refresh(obj)
-    if obj.is_primary:
-        await _ensure_single_primary(db, table=SceneImage, parent_field="scene_id", parent_id=scene_id, keep_id=obj.id)
-        await db.refresh(obj)
     return success_response(SceneImageRead.model_validate(obj), code=201)
 
 
@@ -412,9 +487,6 @@ async def update_scene_image(
         setattr(obj, k, v)
     await db.flush()
     await db.refresh(obj)
-    if update_data.get("is_primary") is True:
-        await _ensure_single_primary(db, table=SceneImage, parent_field="scene_id", parent_id=scene_id, keep_id=obj.id)
-        await db.refresh(obj)
     return success_response(SceneImageRead.model_validate(obj))
 
 
@@ -458,7 +530,17 @@ async def list_props(
     stmt = apply_keyword_filter(stmt, q=q, fields=[Prop.name, Prop.description])
     stmt = apply_order(stmt, model=Prop, order=order, is_desc=is_desc, allow_fields=ASSET_ORDER_FIELDS, default="created_at")
     items, total = await paginate(db, stmt=stmt, page=page, page_size=page_size)
-    return paginated_response([PropRead.model_validate(x) for x in items], page=page, page_size=page_size, total=total)
+    thumbnails = await _resolve_asset_thumbnails(
+        db,
+        image_model=PropImage,
+        parent_field_name="prop_id",
+        parent_ids=[x.id for x in items],
+    )
+    payload = [
+        PropRead.model_validate(x).model_copy(update={"thumbnail": thumbnails.get(x.id, "")})
+        for x in items
+    ]
+    return paginated_response(payload, page=page, page_size=page_size, total=total)
 
 
 @router.post(
@@ -474,10 +556,23 @@ async def create_prop(
     exists = await db.get(Prop, body.id)
     if exists is not None:
         raise HTTPException(status_code=400, detail=f"Prop with id={body.id} already exists")
+
     obj = Prop(**body.model_dump())
     db.add(obj)
     await db.flush()
     await db.refresh(obj)
+
+    angles = _default_view_angles(body.view_count)
+    for angle in angles:
+        db.add(
+            PropImage(
+                prop_id=obj.id,
+                view_angle=angle,
+            )
+        )
+    if angles:
+        await db.flush()
+
     return success_response(PropRead.model_validate(obj), code=201)
 
 
@@ -570,9 +665,6 @@ async def create_prop_image(
     db.add(obj)
     await db.flush()
     await db.refresh(obj)
-    if obj.is_primary:
-        await _ensure_single_primary(db, table=PropImage, parent_field="prop_id", parent_id=prop_id, keep_id=obj.id)
-        await db.refresh(obj)
     return success_response(PropImageRead.model_validate(obj), code=201)
 
 
@@ -595,9 +687,6 @@ async def update_prop_image(
         setattr(obj, k, v)
     await db.flush()
     await db.refresh(obj)
-    if update_data.get("is_primary") is True:
-        await _ensure_single_primary(db, table=PropImage, parent_field="prop_id", parent_id=prop_id, keep_id=obj.id)
-        await db.refresh(obj)
     return success_response(PropImageRead.model_validate(obj))
 
 
@@ -641,7 +730,17 @@ async def list_costumes(
     stmt = apply_keyword_filter(stmt, q=q, fields=[Costume.name, Costume.description])
     stmt = apply_order(stmt, model=Costume, order=order, is_desc=is_desc, allow_fields=ASSET_ORDER_FIELDS, default="created_at")
     items, total = await paginate(db, stmt=stmt, page=page, page_size=page_size)
-    return paginated_response([CostumeRead.model_validate(x) for x in items], page=page, page_size=page_size, total=total)
+    thumbnails = await _resolve_asset_thumbnails(
+        db,
+        image_model=CostumeImage,
+        parent_field_name="costume_id",
+        parent_ids=[x.id for x in items],
+    )
+    payload = [
+        CostumeRead.model_validate(x).model_copy(update={"thumbnail": thumbnails.get(x.id, "")})
+        for x in items
+    ]
+    return paginated_response(payload, page=page, page_size=page_size, total=total)
 
 
 @router.post(
@@ -657,10 +756,23 @@ async def create_costume(
     exists = await db.get(Costume, body.id)
     if exists is not None:
         raise HTTPException(status_code=400, detail=f"Costume with id={body.id} already exists")
+
     obj = Costume(**body.model_dump())
     db.add(obj)
     await db.flush()
     await db.refresh(obj)
+
+    angles = _default_view_angles(body.view_count)
+    for angle in angles:
+        db.add(
+            CostumeImage(
+                costume_id=obj.id,
+                view_angle=angle,
+            )
+        )
+    if angles:
+        await db.flush()
+
     return success_response(CostumeRead.model_validate(obj), code=201)
 
 
@@ -753,9 +865,6 @@ async def create_costume_image(
     db.add(obj)
     await db.flush()
     await db.refresh(obj)
-    if obj.is_primary:
-        await _ensure_single_primary(db, table=CostumeImage, parent_field="costume_id", parent_id=costume_id, keep_id=obj.id)
-        await db.refresh(obj)
     return success_response(CostumeImageRead.model_validate(obj), code=201)
 
 
@@ -778,9 +887,6 @@ async def update_costume_image(
         setattr(obj, k, v)
     await db.flush()
     await db.refresh(obj)
-    if update_data.get("is_primary") is True:
-        await _ensure_single_primary(db, table=CostumeImage, parent_field="costume_id", parent_id=costume_id, keep_id=obj.id)
-        await db.refresh(obj)
     return success_response(CostumeImageRead.model_validate(obj))
 
 

@@ -1,7 +1,8 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Card, Input, Row, Col, Tag, Button, message, Modal, Space, Pagination } from 'antd'
 import { EditOutlined, DeleteOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons'
 import type { AssetCreate, AssetUpdate } from '../../../../services/generated'
+import { OpenAPI } from '../../../../services/generated'
 
 function normalizeTags(input: string): string[] {
   return input
@@ -18,6 +19,39 @@ export type StudioAssetLike = {
   tags?: string[]
 }
 
+function resolveThumbnailUrl(thumbnail?: string): string | undefined {
+  if (!thumbnail) return undefined
+  const value = thumbnail.trim()
+  if (!value) return undefined
+
+  // Keep absolute/data/blob URLs as-is; otherwise resolve against API base.
+  if (/^(?:[a-z][a-z\d+\-.]*:)?\/\//i.test(value) || value.startsWith('data:') || value.startsWith('blob:')) {
+    return value
+  }
+
+  try {
+    const fallbackBase = typeof window !== 'undefined' ? window.location.origin : 'http://localhost'
+    return new URL(value, OpenAPI.BASE || fallbackBase).toString()
+  } catch {
+    return value
+  }
+}
+
+function normalizeAsset(asset: StudioAssetLike): StudioAssetLike {
+  return {
+    ...asset,
+    thumbnail: resolveThumbnailUrl(asset.thumbnail),
+  }
+}
+
+type AssetMutationPayload = AssetUpdate & {
+  thumbnail?: string
+}
+
+type AssetCreatePayload = AssetCreate & {
+  thumbnail?: string
+}
+
 export function AssetTypeTab({
   label,
   listAssets,
@@ -28,8 +62,8 @@ export function AssetTypeTab({
 }: {
   label: string
   listAssets: (params: { q?: string; page: number; pageSize: number }) => Promise<{ items: StudioAssetLike[]; total: number }>
-  createAsset: (payload: AssetCreate) => Promise<StudioAssetLike>
-  updateAsset: (id: string, payload: AssetUpdate) => Promise<StudioAssetLike>
+  createAsset: (payload: AssetCreatePayload) => Promise<StudioAssetLike>
+  updateAsset: (id: string, payload: AssetMutationPayload) => Promise<StudioAssetLike>
   deleteAsset: (id: string) => Promise<void>
   generateImage: (assetId: string) => Promise<string>
 }) {
@@ -41,7 +75,7 @@ export function AssetTypeTab({
   const [total, setTotal] = useState(0)
 
   const [editOpen, setEditOpen] = useState(false)
-  const [editing, setEditing] = useState<Asset | null>(null)
+  const [editing, setEditing] = useState<StudioAssetLike | null>(null)
   const [formName, setFormName] = useState('')
   const [formDesc, setFormDesc] = useState('')
   const [formTags, setFormTags] = useState('')
@@ -57,8 +91,9 @@ export function AssetTypeTab({
       const nextPageSize = opts?.pageSize ?? pageSize
       const nextQ = typeof opts?.q === 'string' ? opts.q : search.trim() || undefined
       const res = await listAssets({ q: nextQ, page: nextPage, pageSize: nextPageSize })
-      setAssets(Array.isArray(res.items) ? res.items : [])
-      setTotal(typeof res.total === 'number' ? res.total : 0)
+      const items = Array.isArray(res.items) ? res.items.map(normalizeAsset) : []
+      setAssets(items)
+      setTotal(res.total)
     } catch {
       message.error('加载资产失败')
     } finally {
@@ -104,10 +139,11 @@ export function AssetTypeTab({
           description: formDesc.trim(),
           tags: normalizeTags(formTags),
         })
-        setAssets((prev) => prev.map((a) => (a.id === editing.id ? next : a)))
+        const normalizedNext = normalizeAsset(next)
+        setAssets((prev) => prev.map((a) => (a.id === editing.id ? normalizedNext : a)))
         message.success('已保存')
       } else {
-        const next = await createAsset({
+        await createAsset({
           id: `asset_${Date.now()}`,
           name: formName.trim(),
           description: formDesc.trim(),
@@ -152,7 +188,8 @@ export function AssetTypeTab({
     try {
       const url = await generateImage(asset.id)
       const next = await updateAsset(asset.id, { thumbnail: url })
-      setAssets((prev) => prev.map((a) => (a.id === asset.id ? next : a)))
+      const normalizedNext = normalizeAsset(next)
+      setAssets((prev) => prev.map((a) => (a.id === asset.id ? normalizedNext : a)))
       message.success('已生成（Mock）')
     } catch {
       message.error('生成失败')
@@ -160,12 +197,13 @@ export function AssetTypeTab({
   }
 
   const openPreview = (asset: StudioAssetLike) => {
-    if (!asset.thumbnail) {
+    const thumbnailUrl = resolveThumbnailUrl(asset.thumbnail)
+    if (!thumbnailUrl) {
       message.info('未生成图片')
       return
     }
     setPreviewTitle(asset.name)
-    setPreviewUrl(asset.thumbnail)
+    setPreviewUrl(thumbnailUrl)
     setPreviewOpen(true)
   }
 
@@ -200,7 +238,9 @@ export function AssetTypeTab({
               <div className="text-center text-gray-500 py-8">{search ? '无匹配资产' : '暂无该类资产'}</div>
             </Col>
           ) : (
-            filtered.map((a) => (
+            filtered.map((a) => {
+              const thumbnailUrl = resolveThumbnailUrl(a.thumbnail)
+              return (
               <Col xs={24} sm={12} md={8} lg={6} key={a.id}>
                 <Card
                   hoverable
@@ -232,8 +272,8 @@ export function AssetTypeTab({
                     className="h-32 rounded-md border border-gray-200 bg-gray-50 flex items-center justify-center text-gray-500 text-sm overflow-hidden cursor-pointer"
                     onClick={() => openPreview(a)}
                   >
-                    {a.thumbnail ? (
-                      <img src={a.thumbnail} alt={a.name} className="w-full h-full object-cover" />
+                    {thumbnailUrl ? (
+                      <img src={thumbnailUrl} alt={a.name} className="w-full h-full object-cover" />
                     ) : (
                       '未生成'
                     )}
@@ -245,7 +285,7 @@ export function AssetTypeTab({
                   </div>
                 </Card>
               </Col>
-            ))
+            )})
           )}
         </Row>
 

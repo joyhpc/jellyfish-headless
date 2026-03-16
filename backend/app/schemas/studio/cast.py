@@ -53,6 +53,8 @@ class CharacterUpdate(BaseModel):
 
 
 class CharacterRead(CharacterBase):
+    thumbnail: str = Field("", description="缩略图下载地址")
+
     class Config:
         from_attributes = True
 

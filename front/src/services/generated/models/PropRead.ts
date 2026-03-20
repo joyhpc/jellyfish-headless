@@ -8,14 +8,6 @@ export type PropRead = {
      */
     id: string;
     /**
-     * 归属项目 ID（可空=全局资产）
-     */
-    project_id?: (string | null);
-    /**
-     * 归属章节 ID（可空）
-     */
-    chapter_id?: (string | null);
-    /**
      * 名称
      */
     name: string;

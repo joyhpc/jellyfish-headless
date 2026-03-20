@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { projects as mockProjects, chapters as mockChapters, type Project, type Chapter as MockChapter } from '../../../../../mocks/data'
-import { StudioChaptersService, StudioProjectsService } from '../../../../../services/generated'
-import type { ChapterRead, ProjectRead } from '../../../../../services/generated'
+import { StudioCastService, StudioChaptersService, StudioProjectsService } from '../../../../../services/generated'
+import type { CharacterRead, ChapterRead, ProjectRead } from '../../../../../services/generated'
 
 const useMock = import.meta.env.VITE_USE_MOCK === 'true'
 
@@ -52,7 +52,7 @@ function toUIChapter(c: ChapterRead): Chapter {
     title: c.title,
     summary: c.summary ?? '',
     rawText: c.raw_text ?? '',
-    storyboardCount: c.storyboard_count ?? 0,
+    storyboardCount: c.shot_count ?? c.storyboard_count ?? 0,
     status: c.status ?? 'draft',
     updatedAt: new Date().toISOString(),
   }
@@ -130,6 +130,39 @@ export function useChapters(projectId: string | undefined) {
   }, [load])
 
   return { chapters, loading, refresh: load, patchChapterLocal }
+}
+
+export function useProjectCharacters(projectId: string | undefined) {
+  const [characters, setCharacters] = useState<CharacterRead[]>([])
+  const [loading, setLoading] = useState(true)
+
+  const load = useCallback(async () => {
+    if (!projectId) {
+      setCharacters([])
+      setLoading(false)
+      return
+    }
+    setLoading(true)
+    try {
+      const res = await StudioCastService.listCharactersApiV1StudioCastCharactersGet({
+        projectId,
+        page: 1,
+        pageSize: 100,
+      })
+      const items = res.data?.items ?? []
+      setCharacters(items)
+    } catch {
+      setCharacters([])
+    } finally {
+      setLoading(false)
+    }
+  }, [projectId])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  return { characters, loading, refresh: load }
 }
 
 export { newId }

@@ -8,8 +8,6 @@ import {
   FolderOutlined,
   PictureOutlined,
   FileTextOutlined,
-  InboxOutlined,
-  RobotOutlined,
   ApiOutlined,
 } from '@ant-design/icons'
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom'
@@ -56,12 +54,29 @@ const MainLayout: React.FC = () => {
       chapters: '章节管理',
       studio: '分镜工作室',
       prep: '章节编辑',
+      shots: '分镜',
       editor: '视频剪辑',
       edit: '编辑',
     }
-    let href = ''
     path.forEach((segment, i) => {
-      href += `/${segment}`
+      // 默认：按原始路径逐段拼接
+      let href = path.slice(0, i + 1).join('/')
+      href = `/${href}`
+
+      // 特殊：章节相关的中间路径段在路由里不存在，需映射到有效地址
+      // /projects/:projectId/chapters/:chapterId/*
+      if (path[0] === 'projects' && path[2] === 'chapters') {
+        const projectId = path[1]
+        const chapterId = path[3]
+        if (segment === 'chapters' && i === 2) {
+          // “章节管理”实际在项目工作台页
+          href = `/projects/${projectId}`
+        } else if (i === 3) {
+          // 章节 ID 段没有对应独立页面，跳到拍摄准备（存在路由）
+          href = `/projects/${projectId}/chapters/${chapterId}/prep`
+        }
+      }
+
       const isLast = i === path.length - 1
       let label = pathLabels[segment]
       if (label === undefined) {
@@ -92,16 +107,6 @@ const MainLayout: React.FC = () => {
       key: 'prompts',
       icon: <FileTextOutlined />,
       label: <Link to="/prompts">提示词模板</Link>,
-    },
-    {
-      key: 'files',
-      icon: <InboxOutlined />,
-      label: <Link to="/files">文件管理</Link>,
-    },
-    {
-      key: 'agents',
-      icon: <RobotOutlined />,
-      label: <Link to="/agents">Agent管理</Link>,
     },
     {
       key: 'models',

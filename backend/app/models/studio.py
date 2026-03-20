@@ -6,7 +6,7 @@
 
 资产语义约定（避免歧义）：
 - 资产拆为四张独立表：演员形象/立绘（ActorImage）、场景（Scene）、道具（Prop）、服装（Costume）。
-- 各表“归属/范围”由 `project_id` / `chapter_id` 表达；在分镜中的引用由对应 Link 表表达（ShotActorImageLink / ShotSceneLink / ShotPropLink / ShotCostumeLink）。
+- 资产本体不再归属 project/chapter；引用关系由 Project*Link（project/chapter/shot 维度）表达。
 
 应用层保证（在类/字段注释中标记为「应用层保证」或「应用层需保证」）：
 - 跨项目引用一致性：对白说话人/听者、角色服装与道具、镜头关联的场景/道具/服装/演员形象，应与镜头/角色所属项目一致或为全局资产。
@@ -211,25 +211,29 @@ class Project(Base, TimestampMixin):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
-    actor_images: Mapped[list["ActorImage"]] = relationship(
+    actor_links: Mapped[list["ProjectActorLink"]] = relationship(
         back_populates="project",
         cascade="all, delete-orphan",
         passive_deletes=True,
+        order_by="ProjectActorLink.id",
     )
-    scenes: Mapped[list["Scene"]] = relationship(
+    scene_links: Mapped[list["ProjectSceneLink"]] = relationship(
         back_populates="project",
         cascade="all, delete-orphan",
         passive_deletes=True,
+        order_by="ProjectSceneLink.id",
     )
-    props: Mapped[list["Prop"]] = relationship(
+    prop_links: Mapped[list["ProjectPropLink"]] = relationship(
         back_populates="project",
         cascade="all, delete-orphan",
         passive_deletes=True,
+        order_by="ProjectPropLink.id",
     )
-    costumes: Mapped[list["Costume"]] = relationship(
+    costume_links: Mapped[list["ProjectCostumeLink"]] = relationship(
         back_populates="project",
         cascade="all, delete-orphan",
         passive_deletes=True,
+        order_by="ProjectCostumeLink.id",
     )
 
     __table_args__ = (
@@ -283,84 +287,12 @@ class Chapter(Base, TimestampMixin):
     )
 
 
-class ActorImage(Base, TimestampMixin):
-    """演员形象/立绘表。归属由 project_id/chapter_id 表达；镜头引用见 ShotActorImageLink。"""
-
-    __tablename__ = "actor_images"
-
-    id: Mapped[str] = mapped_column(String(64), primary_key=True, comment="ID")
-    project_id: Mapped[str | None] = mapped_column(
-        String(64),
-        ForeignKey("projects.id", ondelete="CASCADE"),
-        nullable=True,
-        index=True,
-        comment="归属项目 ID",
-    )
-    chapter_id: Mapped[str | None] = mapped_column(
-        String(64),
-        ForeignKey("chapters.id", ondelete="CASCADE"),
-        nullable=True,
-        index=True,
-        comment="归属章节 ID",
-    )
-    name: Mapped[str] = mapped_column(String(255), nullable=False, comment="名称")
-    description: Mapped[str] = mapped_column(Text, nullable=False, default="", comment="描述")
-    view_count: Mapped[int] = mapped_column(
-        Integer,
-        nullable=False,
-        default=1,
-        comment="计划为该演员形象生成的视角图片数量（不含分镜帧）",
-    )
-    tags: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list, comment="标签")
-    prompt_template_id: Mapped[str | None] = mapped_column(
-        String(64),
-        ForeignKey("prompt_templates.id", ondelete="SET NULL"),
-        nullable=True,
-        index=True,
-        comment="提示词模板 ID",
-    )
-
-    project: Mapped["Project | None"] = relationship(back_populates="actor_images")
-    chapter: Mapped["Chapter | None"] = relationship()
-    prompt_template: Mapped["PromptTemplate | None"] = relationship()
-    images: Mapped[list["ActorImageImage"]] = relationship(
-        back_populates="actor_image",
-        cascade="all, delete-orphan",
-        passive_deletes=True,
-        order_by="ActorImageImage.id",
-    )
-    shot_links: Mapped[list["ShotActorImageLink"]] = relationship(
-        back_populates="actor_image",
-        cascade="all, delete-orphan",
-        passive_deletes=True,
-    )
-
-    __table_args__ = (
-        Index("ix_actor_images_name", "name"),
-        Index("ix_actor_images_project_chapter", "project_id", "chapter_id"),
-    )
-
-
 class Scene(Base, TimestampMixin):
-    """场景表。归属由 project_id/chapter_id 表达；镜头引用见 ShotSceneLink。"""
+    """场景表。"""
 
     __tablename__ = "scenes"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, comment="ID")
-    project_id: Mapped[str | None] = mapped_column(
-        String(64),
-        ForeignKey("projects.id", ondelete="CASCADE"),
-        nullable=True,
-        index=True,
-        comment="归属项目 ID",
-    )
-    chapter_id: Mapped[str | None] = mapped_column(
-        String(64),
-        ForeignKey("chapters.id", ondelete="CASCADE"),
-        nullable=True,
-        index=True,
-        comment="归属章节 ID",
-    )
     name: Mapped[str] = mapped_column(String(255), nullable=False, comment="名称")
     description: Mapped[str] = mapped_column(Text, nullable=False, default="", comment="描述")
     view_count: Mapped[int] = mapped_column(
@@ -378,8 +310,6 @@ class Scene(Base, TimestampMixin):
         comment="提示词模板 ID",
     )
 
-    project: Mapped["Project | None"] = relationship(back_populates="scenes")
-    chapter: Mapped["Chapter | None"] = relationship()
     prompt_template: Mapped["PromptTemplate | None"] = relationship()
     images: Mapped[list["SceneImage"]] = relationship(
         back_populates="scene",
@@ -387,38 +317,19 @@ class Scene(Base, TimestampMixin):
         passive_deletes=True,
         order_by="SceneImage.id",
     )
-    shot_links: Mapped[list["ShotSceneLink"]] = relationship(
-        back_populates="scene",
-        cascade="all, delete-orphan",
-        passive_deletes=True,
-    )
 
     __table_args__ = (
         Index("ix_scenes_name", "name"),
-        Index("ix_scenes_project_chapter", "project_id", "chapter_id"),
+        UniqueConstraint("name", name="uq_scenes_name"),
     )
 
 
 class Prop(Base, TimestampMixin):
-    """道具表。归属由 project_id/chapter_id 表达；镜头引用见 ShotPropLink；角色道具绑定见 CharacterPropLink。"""
+    """道具表。角色道具绑定见 CharacterPropLink。"""
 
     __tablename__ = "props"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, comment="ID")
-    project_id: Mapped[str | None] = mapped_column(
-        String(64),
-        ForeignKey("projects.id", ondelete="CASCADE"),
-        nullable=True,
-        index=True,
-        comment="归属项目 ID",
-    )
-    chapter_id: Mapped[str | None] = mapped_column(
-        String(64),
-        ForeignKey("chapters.id", ondelete="CASCADE"),
-        nullable=True,
-        index=True,
-        comment="归属章节 ID",
-    )
     name: Mapped[str] = mapped_column(String(255), nullable=False, comment="名称")
     description: Mapped[str] = mapped_column(Text, nullable=False, default="", comment="描述")
     view_count: Mapped[int] = mapped_column(
@@ -436,19 +347,12 @@ class Prop(Base, TimestampMixin):
         comment="提示词模板 ID",
     )
 
-    project: Mapped["Project | None"] = relationship(back_populates="props")
-    chapter: Mapped["Chapter | None"] = relationship()
     prompt_template: Mapped["PromptTemplate | None"] = relationship()
     images: Mapped[list["PropImage"]] = relationship(
         back_populates="prop",
         cascade="all, delete-orphan",
         passive_deletes=True,
         order_by="PropImage.id",
-    )
-    shot_links: Mapped[list["ShotPropLink"]] = relationship(
-        back_populates="prop",
-        cascade="all, delete-orphan",
-        passive_deletes=True,
     )
     character_prop_links: Mapped[list["CharacterPropLink"]] = relationship(
         back_populates="prop",
@@ -458,30 +362,16 @@ class Prop(Base, TimestampMixin):
 
     __table_args__ = (
         Index("ix_props_name", "name"),
-        Index("ix_props_project_chapter", "project_id", "chapter_id"),
+        UniqueConstraint("name", name="uq_props_name"),
     )
 
 
 class Costume(Base, TimestampMixin):
-    """服装表。归属由 project_id/chapter_id 表达；镜头引用见 ShotCostumeLink；角色服装见 Character.costume_id。"""
+    """服装表。角色服装见 Character.costume_id。"""
 
     __tablename__ = "costumes"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, comment="ID")
-    project_id: Mapped[str | None] = mapped_column(
-        String(64),
-        ForeignKey("projects.id", ondelete="CASCADE"),
-        nullable=True,
-        index=True,
-        comment="归属项目 ID",
-    )
-    chapter_id: Mapped[str | None] = mapped_column(
-        String(64),
-        ForeignKey("chapters.id", ondelete="CASCADE"),
-        nullable=True,
-        index=True,
-        comment="归属章节 ID",
-    )
     name: Mapped[str] = mapped_column(String(255), nullable=False, comment="名称")
     description: Mapped[str] = mapped_column(Text, nullable=False, default="", comment="描述")
     view_count: Mapped[int] = mapped_column(
@@ -499,8 +389,6 @@ class Costume(Base, TimestampMixin):
         comment="提示词模板 ID",
     )
 
-    project: Mapped["Project | None"] = relationship(back_populates="costumes")
-    chapter: Mapped["Chapter | None"] = relationship()
     prompt_template: Mapped["PromptTemplate | None"] = relationship()
     images: Mapped[list["CostumeImage"]] = relationship(
         back_populates="costume",
@@ -508,16 +396,11 @@ class Costume(Base, TimestampMixin):
         passive_deletes=True,
         order_by="CostumeImage.id",
     )
-    shot_links: Mapped[list["ShotCostumeLink"]] = relationship(
-        back_populates="costume",
-        cascade="all, delete-orphan",
-        passive_deletes=True,
-    )
     characters: Mapped[list["Character"]] = relationship(back_populates="costume")
 
     __table_args__ = (
         Index("ix_costumes_name", "name"),
-        Index("ix_costumes_project_chapter", "project_id", "chapter_id"),
+        UniqueConstraint("name", name="uq_costumes_name"),
     )
 
 
@@ -567,29 +450,29 @@ class Shot(Base,TimestampMixin):
         passive_deletes=True,
         uselist=False,
     )
-    scene_links: Mapped[list["ShotSceneLink"]] = relationship(
+    actor_links: Mapped[list["ProjectActorLink"]] = relationship(
         back_populates="shot",
         cascade="all, delete-orphan",
         passive_deletes=True,
-        order_by="ShotSceneLink.index",
+        order_by="ProjectActorLink.id",
     )
-    prop_links: Mapped[list["ShotPropLink"]] = relationship(
+    scene_links: Mapped[list["ProjectSceneLink"]] = relationship(
         back_populates="shot",
         cascade="all, delete-orphan",
         passive_deletes=True,
-        order_by="ShotPropLink.index",
+        order_by="ProjectSceneLink.id",
     )
-    costume_links: Mapped[list["ShotCostumeLink"]] = relationship(
+    prop_links: Mapped[list["ProjectPropLink"]] = relationship(
         back_populates="shot",
         cascade="all, delete-orphan",
         passive_deletes=True,
-        order_by="ShotCostumeLink.index",
+        order_by="ProjectPropLink.id",
     )
-    actor_image_links: Mapped[list["ShotActorImageLink"]] = relationship(
+    costume_links: Mapped[list["ProjectCostumeLink"]] = relationship(
         back_populates="shot",
         cascade="all, delete-orphan",
         passive_deletes=True,
-        order_by="ShotActorImageLink.index",
+        order_by="ProjectCostumeLink.id",
     )
     character_links: Mapped[list["ShotCharacterLink"]] = relationship(
         back_populates="shot",
@@ -802,34 +685,42 @@ class Actor(Base, TimestampMixin):
     """演员表（与角色区分）。
 
     说明：
-    - Actor 表示“表演者/演员”，可全局或项目级复用；角色（Character）归属项目并引用 Actor。
-    - 项目级：`(project_id, name)` 唯一；全局（project_id 为空）时数据库不约束重名。
-
-    应用层保证：
-    - 若业务要求全局演员也不重名，需在应用层校验或约束。
+    - 使用 ActorImage（旧） 的字段集合，作为“演员形象/立绘资产”的主表。
+    - 归属由 ProjectActorLink（project/chapter/shot 维度）表达。
     """
 
     __tablename__ = "actors"
 
-    id: Mapped[str] = mapped_column(String(64), primary_key=True, comment="演员 ID")
-    project_id: Mapped[str | None] = mapped_column(
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, comment="ID")
+    name: Mapped[str] = mapped_column(String(255), nullable=False, comment="名称")
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="", comment="描述")
+    view_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=1,
+        comment="计划为该演员形象生成的视角图片数量（不含分镜帧）",
+    )
+    tags: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list, comment="标签")
+    prompt_template_id: Mapped[str | None] = mapped_column(
         String(64),
-        ForeignKey("projects.id", ondelete="CASCADE"),
+        ForeignKey("prompt_templates.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
-        comment="归属项目 ID（为空=全局演员）",
+        comment="提示词模板 ID",
     )
-    name: Mapped[str] = mapped_column(String(255), nullable=False, comment="演员名称")
-    description: Mapped[str] = mapped_column(Text, nullable=False, default="", comment="演员描述/备注")
-    thumbnail: Mapped[str] = mapped_column(String(1024), nullable=False, default="", comment="演员头像/缩略图")
-    tags: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list, comment="标签（JSON 数组）")
 
-    project: Mapped["Project | None"] = relationship()
+    prompt_template: Mapped["PromptTemplate | None"] = relationship()
+    images: Mapped[list["ActorImage"]] = relationship(
+        back_populates="actor",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="ActorImage.id",
+    )
     characters: Mapped[list["Character"]] = relationship(back_populates="actor")
 
     __table_args__ = (
         Index("ix_actors_name", "name"),
-        UniqueConstraint("project_id", "name", name="uq_actors_project_name"),
+        UniqueConstraint("name", name="uq_actors_name"),
     )
 
 
@@ -856,12 +747,12 @@ class Character(Base, TimestampMixin):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False, comment="角色名称")
     description: Mapped[str] = mapped_column(Text, nullable=False, default="", comment="角色描述")
-    actor_id: Mapped[str | None] = mapped_column(
+    actor_id: Mapped[str] = mapped_column(
         String(64),
-        ForeignKey("actors.id", ondelete="SET NULL"),
-        nullable=True,
+        ForeignKey("actors.id", ondelete="RESTRICT"),
+        nullable=False,
         index=True,
-        comment="对应演员 ID（可空）",
+        comment="对应演员 ID",
     )
     costume_id: Mapped[str | None] = mapped_column(
         String(64),
@@ -872,7 +763,7 @@ class Character(Base, TimestampMixin):
     )
 
     project: Mapped["Project"] = relationship(back_populates="characters")
-    actor: Mapped["Actor | None"] = relationship(back_populates="characters")
+    actor: Mapped["Actor"] = relationship(back_populates="characters")
     costume: Mapped["Costume | None"] = relationship(back_populates="characters")
     prop_links: Mapped[list["CharacterPropLink"]] = relationship(
         back_populates="character",
@@ -918,9 +809,9 @@ class CharacterImage(Base, TimestampMixin):
     file_id: Mapped[str] = mapped_column(
         String(64),
         ForeignKey("files.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
         index=True,
-        comment="关联的文件 ID（FileItem）",
+        comment="关联的文件 ID（FileItem，可空，支持先创建槽位后填充）",
     )
     quality_level: Mapped[AssetQualityLevel] = mapped_column(
         String(16),
@@ -938,7 +829,7 @@ class CharacterImage(Base, TimestampMixin):
     )
     width: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="宽（px）")
     height: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="高（px）")
-    format: Mapped[str] = mapped_column(String(32), nullable=False, default="png", comment="格式")
+    format: Mapped[str] = mapped_column(String(32), nullable=True, default="png", comment="格式")
     is_primary: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
@@ -1028,22 +919,22 @@ class ShotCharacterLink(Base,TimestampMixin):
     )
 
 
-class ActorImageImage(Base, TimestampMixin):
+class ActorImage(Base, TimestampMixin):
     """演员形象/立绘多角度图片。
 
     应用层保证：
-    - 同一 `actor_image_id` 下至多一条 `is_primary=True`；库表无唯一约束，需在写入/更新时保证。
+    - 同一 `actor_id` 下至多一条 `is_primary=True`；库表无唯一约束，需在写入/更新时保证。
     """
 
-    __tablename__ = "actor_image_images"
+    __tablename__ = "actor_images"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True, comment="图片行 ID")
-    actor_image_id: Mapped[str] = mapped_column(
+    actor_id: Mapped[str] = mapped_column(
         String(64),
-        ForeignKey("actor_images.id", ondelete="CASCADE"),
+        ForeignKey("actors.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
-        comment="所属演员形象 ID",
+        comment="所属演员 ID",
     )
     file_id: Mapped[str | None] = mapped_column(
         String(64),
@@ -1070,10 +961,10 @@ class ActorImageImage(Base, TimestampMixin):
     height: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="高（px）")
     format: Mapped[str] = mapped_column(String(32), nullable=False, default="png", comment="格式")
 
-    actor_image: Mapped["ActorImage"] = relationship(back_populates="images")
+    actor: Mapped["Actor"] = relationship(back_populates="images")
 
     __table_args__ = (
-        UniqueConstraint("actor_image_id", "quality_level", "view_angle", name="uq_actor_image_images_quality_angle"),
+        UniqueConstraint("actor_id", "quality_level", "view_angle", name="uq_actor_images_quality_angle"),
     )
 
 
@@ -1220,99 +1111,107 @@ class CostumeImage(Base, TimestampMixin):
     )
 
 
-class ShotActorImageLink(Base,TimestampMixin):
-    """镜头引用演员形象/立绘（多对多）。
+class ProjectActorLink(Base, TimestampMixin):
+    """项目/章节/镜头 -> 演员关联。"""
 
-    应用层保证：
-    - 所引用的演员形象应与镜头所属项目一致或为全局资产，避免跨项目引用。
-    """
-
-    __tablename__ = "shot_actor_image_links"
+    __tablename__ = "project_actor_links"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True, comment="关联行 ID")
-    shot_id: Mapped[str] = mapped_column(String(64), ForeignKey("shots.id", ondelete="CASCADE"), nullable=False, index=True, comment="镜头 ID")
-    actor_image_id: Mapped[str] = mapped_column(String(64), ForeignKey("actor_images.id", ondelete="CASCADE"), nullable=False, index=True, comment="演员形象 ID")
-    index: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="镜头内排序")
-    note: Mapped[str] = mapped_column(Text, nullable=False, default="", comment="备注")
+    project_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+        comment="项目 ID",
+    )
+    chapter_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("chapters.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        comment="章节 ID",
+    )
+    shot_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("shots.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        comment="镜头 ID",
+    )
+    actor_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("actors.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+        comment="演员 ID",
+    )
 
-    shot: Mapped["Shot"] = relationship(back_populates="actor_image_links")
-    actor_image: Mapped["ActorImage"] = relationship(back_populates="shot_links")
+    project: Mapped["Project"] = relationship(back_populates="actor_links")
+    shot: Mapped["Shot"] = relationship(back_populates="actor_links")
+    actor: Mapped["Actor"] = relationship()
 
     __table_args__ = (
-        UniqueConstraint("shot_id", "actor_image_id", name="uq_shot_actor_image_links_shot_actor_image"),
-        UniqueConstraint("shot_id", "index", name="uq_shot_actor_image_links_shot_index"),
+        UniqueConstraint("actor_id", "project_id", "chapter_id", "shot_id", name="uq_project_actor_links_actor_scope"),
     )
 
 
-class ShotSceneLink(Base,TimestampMixin):
-    """镜头引用场景（多对多）。
+class ProjectSceneLink(Base, TimestampMixin):
+    """项目/章节/镜头 -> 场景关联。"""
 
-    应用层保证：
-    - 所引用场景应与镜头所属项目一致或为全局资产，避免跨项目引用。
-    """
-
-    __tablename__ = "shot_scene_links"
+    __tablename__ = "project_scene_links"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True, comment="关联行 ID")
-    shot_id: Mapped[str] = mapped_column(String(64), ForeignKey("shots.id", ondelete="CASCADE"), nullable=False, index=True, comment="镜头 ID")
+    project_id: Mapped[str] = mapped_column(String(64), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True, comment="项目 ID")
+    chapter_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("chapters.id", ondelete="SET NULL"), nullable=True, index=True, comment="章节 ID")
+    shot_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("shots.id", ondelete="SET NULL"), nullable=True, index=True, comment="镜头 ID")
     scene_id: Mapped[str] = mapped_column(String(64), ForeignKey("scenes.id", ondelete="CASCADE"), nullable=False, index=True, comment="场景 ID")
-    index: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="镜头内排序")
-    note: Mapped[str] = mapped_column(Text, nullable=False, default="", comment="备注")
 
+    project: Mapped["Project"] = relationship(back_populates="scene_links")
     shot: Mapped["Shot"] = relationship(back_populates="scene_links")
-    scene: Mapped["Scene"] = relationship(back_populates="shot_links")
+    scene: Mapped["Scene"] = relationship()
 
     __table_args__ = (
-        UniqueConstraint("shot_id", "scene_id", name="uq_shot_scene_links_shot_scene"),
-        UniqueConstraint("shot_id", "index", name="uq_shot_scene_links_shot_index"),
+        UniqueConstraint("scene_id", "project_id", "chapter_id", "shot_id", name="uq_project_scene_links_scene_scope"),
     )
 
 
-class ShotPropLink(Base,TimestampMixin):
-    """镜头引用道具（多对多）。
+class ProjectPropLink(Base, TimestampMixin):
+    """项目/章节/镜头 -> 道具关联。"""
 
-    应用层保证：
-    - 所引用道具应与镜头所属项目一致或为全局资产，避免跨项目引用。
-    """
-
-    __tablename__ = "shot_prop_links"
+    __tablename__ = "project_prop_links"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True, comment="关联行 ID")
-    shot_id: Mapped[str] = mapped_column(String(64), ForeignKey("shots.id", ondelete="CASCADE"), nullable=False, index=True, comment="镜头 ID")
+    project_id: Mapped[str] = mapped_column(String(64), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True, comment="项目 ID")
+    chapter_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("chapters.id", ondelete="SET NULL"), nullable=True, index=True, comment="章节 ID")
+    shot_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("shots.id", ondelete="SET NULL"), nullable=True, index=True, comment="镜头 ID")
     prop_id: Mapped[str] = mapped_column(String(64), ForeignKey("props.id", ondelete="CASCADE"), nullable=False, index=True, comment="道具 ID")
-    index: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="镜头内排序")
-    note: Mapped[str] = mapped_column(Text, nullable=False, default="", comment="备注")
 
+    project: Mapped["Project"] = relationship(back_populates="prop_links")
     shot: Mapped["Shot"] = relationship(back_populates="prop_links")
-    prop: Mapped["Prop"] = relationship(back_populates="shot_links")
+    prop: Mapped["Prop"] = relationship()
 
     __table_args__ = (
-        UniqueConstraint("shot_id", "prop_id", name="uq_shot_prop_links_shot_prop"),
-        UniqueConstraint("shot_id", "index", name="uq_shot_prop_links_shot_index"),
+        UniqueConstraint("prop_id", "project_id", "chapter_id", "shot_id", name="uq_project_prop_links_prop_scope"),
     )
 
 
-class ShotCostumeLink(Base,TimestampMixin):
-    """镜头引用服装（多对多）。
+class ProjectCostumeLink(Base, TimestampMixin):
+    """项目/章节/镜头 -> 服装关联。"""
 
-    应用层保证：
-    - 所引用服装应与镜头所属项目一致或为全局资产，避免跨项目引用。
-    """
-
-    __tablename__ = "shot_costume_links"
+    __tablename__ = "project_costume_links"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True, comment="关联行 ID")
-    shot_id: Mapped[str] = mapped_column(String(64), ForeignKey("shots.id", ondelete="CASCADE"), nullable=False, index=True, comment="镜头 ID")
+    project_id: Mapped[str] = mapped_column(String(64), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True, comment="项目 ID")
+    chapter_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("chapters.id", ondelete="SET NULL"), nullable=True, index=True, comment="章节 ID")
+    shot_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("shots.id", ondelete="SET NULL"), nullable=True, index=True, comment="镜头 ID")
     costume_id: Mapped[str] = mapped_column(String(64), ForeignKey("costumes.id", ondelete="CASCADE"), nullable=False, index=True, comment="服装 ID")
-    index: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="镜头内排序")
-    note: Mapped[str] = mapped_column(Text, nullable=False, default="", comment="备注")
 
+    project: Mapped["Project"] = relationship(back_populates="costume_links")
     shot: Mapped["Shot"] = relationship(back_populates="costume_links")
-    costume: Mapped["Costume"] = relationship(back_populates="shot_links")
+    costume: Mapped["Costume"] = relationship()
 
     __table_args__ = (
-        UniqueConstraint("shot_id", "costume_id", name="uq_shot_costume_links_shot_costume"),
-        UniqueConstraint("shot_id", "index", name="uq_shot_costume_links_shot_index"),
+        UniqueConstraint("costume_id", "project_id", "chapter_id", "shot_id", name="uq_project_costume_links_costume_scope"),
     )
 
 
@@ -1326,8 +1225,8 @@ class PromptCategory(str, Enum):
     storyboard = "storyboard"
     bgm = "bgm"
     sfx = "sfx"
-    chapter_front = "chapter_front"
-    chapter_other = "chapter_other"
+    character_front = "character_front"
+    character_other = "character_other"
     actor_image_front = "actor_image_front"
     actor_image_other = "actor_image_other"
     prop_front = "prop_front"

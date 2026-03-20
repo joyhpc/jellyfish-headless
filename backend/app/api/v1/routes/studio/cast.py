@@ -10,6 +10,7 @@ from app.api.utils import apply_keyword_filter, apply_order, paginate
 from app.dependencies import get_db
 from app.models.studio import (
     Actor,
+    ActorImage,
     AssetViewAngle,
     Chapter,
     Character,
@@ -36,6 +37,7 @@ from app.schemas.studio.cast import (
     ShotCharacterLinkRead,
     ShotCharacterLinkUpdate,
 )
+from app.schemas.studio.cast_images import ActorImageRead
 from app.schemas.studio.assets import AssetImageCreate, AssetImageUpdate, CharacterImageRead
 
 router = APIRouter()
@@ -93,6 +95,39 @@ def _download_url(file_id: str) -> str:
     return DOWNLOAD_URL_TEMPLATE.format(file_id=file_id)
 
 
+async def _resolve_actor_thumbnails(
+    db: AsyncSession,
+    *,
+    actor_ids: list[str],
+) -> dict[str, str]:
+    if not actor_ids:
+        return {}
+
+    stmt = select(ActorImage).where(
+        ActorImage.actor_id.in_(actor_ids),
+        ActorImage.file_id.is_not(None),
+    )
+    result = await db.execute(stmt)
+    rows = result.scalars().all()
+
+    best: dict[str, tuple[int, int, int, str]] = {}
+    for row in rows:
+        file_id = row.file_id
+        if not file_id:
+            continue
+        created_ts = int(row.created_at.timestamp()) if row.created_at else -1
+        score = (
+            1 if row.view_angle == AssetViewAngle.front else 0,
+            created_ts,
+            row.id,
+        )
+        current = best.get(row.actor_id)
+        if current is None or score > current[:3]:
+            best[row.actor_id] = (*score, file_id)
+
+    return {actor_id: _download_url(score[3]) for actor_id, score in best.items()}
+
+
 async def _resolve_character_thumbnails(
     db: AsyncSession,
     *,
@@ -136,7 +171,6 @@ async def _resolve_character_thumbnails(
 )
 async def list_actors(
     db: AsyncSession = Depends(get_db),
-    project_id: str | None = Query(None, description="按项目过滤；不传则包含全局+项目"),
     q: str | None = Query(None, description="关键字，过滤 name/description"),
     order: str | None = Query(None),
     is_desc: bool = Query(False),
@@ -144,12 +178,15 @@ async def list_actors(
     page_size: int = Query(10, ge=1, le=100),
 ) -> ApiResponse[PaginatedData[ActorRead]]:
     stmt = select(Actor)
-    if project_id is not None:
-        stmt = stmt.where(Actor.project_id == project_id)
     stmt = apply_keyword_filter(stmt, q=q, fields=[Actor.name, Actor.description])
     stmt = apply_order(stmt, model=Actor, order=order, is_desc=is_desc, allow_fields=ACTOR_ORDER_FIELDS, default="created_at")
     items, total = await paginate(db, stmt=stmt, page=page, page_size=page_size)
-    return paginated_response([ActorRead.model_validate(x) for x in items], page=page, page_size=page_size, total=total)
+    thumbnails = await _resolve_actor_thumbnails(db, actor_ids=[x.id for x in items])
+    payload = [
+        ActorRead.model_validate(x).model_copy(update={"thumbnail": thumbnails.get(x.id, "")})
+        for x in items
+    ]
+    return paginated_response(payload, page=page, page_size=page_size, total=total)
 
 
 @router.post(
@@ -165,12 +202,24 @@ async def create_actor(
     exists = await db.get(Actor, body.id)
     if exists is not None:
         raise HTTPException(status_code=400, detail=f"Actor with id={body.id} already exists")
-    if body.project_id is not None:
-        await _ensure_project_exists(db, body.project_id)
+    # Actor 不再归属 project/chapter
     obj = Actor(**body.model_dump())
     db.add(obj)
     await db.flush()
     await db.refresh(obj)
+
+    DEFAULT_VIEW_ANGLES: tuple[AssetViewAngle, ...] = (
+        AssetViewAngle.front,
+        AssetViewAngle.left,
+        AssetViewAngle.right,
+        AssetViewAngle.back,
+    )
+    angles = list(DEFAULT_VIEW_ANGLES[: min(max(obj.view_count, 0), len(DEFAULT_VIEW_ANGLES))])
+    for angle in angles:
+        db.add(ActorImage(actor_id=obj.id, view_angle=angle))
+    if angles:
+        await db.flush()
+
     return success_response(ActorRead.model_validate(obj), code=201)
 
 
@@ -186,7 +235,8 @@ async def get_actor(
     obj = await db.get(Actor, actor_id)
     if obj is None:
         raise HTTPException(status_code=404, detail="Actor not found")
-    return success_response(ActorRead.model_validate(obj))
+    thumbnails = await _resolve_actor_thumbnails(db, actor_ids=[obj.id])
+    return success_response(ActorRead.model_validate(obj).model_copy(update={"thumbnail": thumbnails.get(obj.id, "")}))
 
 
 @router.patch(
@@ -203,13 +253,93 @@ async def update_actor(
     if obj is None:
         raise HTTPException(status_code=404, detail="Actor not found")
     update_data = body.model_dump(exclude_unset=True)
-    if "project_id" in update_data and update_data["project_id"] is not None:
-        await _ensure_project_exists(db, update_data["project_id"])
     for k, v in update_data.items():
         setattr(obj, k, v)
     await db.flush()
     await db.refresh(obj)
     return success_response(ActorRead.model_validate(obj))
+
+
+# ---------- Actor images ----------
+
+
+@router.get(
+    "/actors/{actor_id}/images",
+    response_model=ApiResponse[PaginatedData[ActorImageRead]],
+    summary="演员图片列表（分页）",
+)
+async def list_actor_images(
+    actor_id: str,
+    db: AsyncSession = Depends(get_db),
+    order: str | None = Query(None),
+    is_desc: bool = Query(False),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=100),
+):
+    stmt = select(ActorImage).where(ActorImage.actor_id == actor_id)
+    stmt = apply_order(stmt, model=ActorImage, order=order, is_desc=is_desc, allow_fields=IMAGE_ORDER_FIELDS, default="id")
+    items, total = await paginate(db, stmt=stmt, page=page, page_size=page_size)
+    return paginated_response([ActorImageRead.model_validate(x) for x in items], page=page, page_size=page_size, total=total)
+
+
+@router.post(
+    "/actors/{actor_id}/images",
+    response_model=ApiResponse[ActorImageRead],
+    status_code=status.HTTP_201_CREATED,
+    summary="创建演员图片",
+)
+async def create_actor_image(
+    actor_id: str,
+    body: AssetImageCreate,
+    db: AsyncSession = Depends(get_db),
+):
+    if await db.get(Actor, actor_id) is None:
+        raise HTTPException(status_code=404, detail="Actor not found")
+    obj = ActorImage(actor_id=actor_id, **body.model_dump())
+    db.add(obj)
+    await db.flush()
+    await db.refresh(obj)
+    return success_response(ActorImageRead.model_validate(obj), code=201)
+
+
+@router.patch(
+    "/actors/{actor_id}/images/{image_id}",
+    response_model=ApiResponse[ActorImageRead],
+    summary="更新演员图片",
+)
+async def update_actor_image(
+    actor_id: str,
+    image_id: int,
+    body: AssetImageUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    obj = await db.get(ActorImage, image_id)
+    if obj is None or obj.actor_id != actor_id:
+        raise HTTPException(status_code=404, detail="ActorImage not found")
+    update_data = body.model_dump(exclude_unset=True)
+    for k, v in update_data.items():
+        setattr(obj, k, v)
+    await db.flush()
+    await db.refresh(obj)
+    return success_response(ActorImageRead.model_validate(obj))
+
+
+@router.delete(
+    "/actors/{actor_id}/images/{image_id}",
+    response_model=ApiResponse[None],
+    summary="删除演员图片",
+)
+async def delete_actor_image(
+    actor_id: str,
+    image_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[None]:
+    obj = await db.get(ActorImage, image_id)
+    if obj is None or obj.actor_id != actor_id:
+        return success_response(None)
+    await db.delete(obj)
+    await db.flush()
+    return success_response(None)
 
 
 @router.delete(
@@ -274,8 +404,7 @@ async def create_character(
     if exists is not None:
         raise HTTPException(status_code=400, detail=f"Character with id={body.id} already exists")
     await _ensure_project_exists(db, body.project_id)
-    if body.actor_id is not None:
-        await _ensure_actor_exists(db, body.actor_id)
+    await _ensure_actor_exists(db, body.actor_id)
     if body.costume_id is not None:
         await _ensure_costume_exists(db, body.costume_id)
     obj = Character(**body.model_dump())

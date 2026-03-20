@@ -9,26 +9,31 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.utils import apply_keyword_filter, apply_order, paginate
 from app.dependencies import get_db
 from app.models.studio import (
-    ActorImage,
     Chapter,
     Character,
     Costume,
+    CostumeImage,
+    Project,
     Prop,
+    PropImage,
     Scene,
+    SceneImage,
     Shot,
-    ShotActorImageLink,
-    ShotCostumeLink,
+    Actor,
+    AssetViewAngle,
+    ProjectActorLink,
+    ProjectCostumeLink,
+    ProjectPropLink,
+    ProjectSceneLink,
     ShotDetail,
     ShotDialogLine,
     ShotFrameImage,
-    ShotPropLink,
-    ShotSceneLink,
 )
 from app.schemas.common import ApiResponse, PaginatedData, paginated_response, success_response
 from app.schemas.studio.shots import (
-    ShotActorImageLinkRead,
-    ShotAssetLinkCreate,
-    ShotCostumeLinkRead,
+    ProjectActorLinkRead,
+    ProjectAssetLinkCreate,
+    ProjectCostumeLinkRead,
     ShotCreate,
     ShotDetailCreate,
     ShotDetailRead,
@@ -36,15 +41,15 @@ from app.schemas.studio.shots import (
     ShotDialogLineCreate,
     ShotDialogLineRead,
     ShotDialogLineUpdate,
-    ShotLinkUpdate,
-    ShotPropLinkRead,
+    ProjectPropLinkRead,
     ShotRead,
-    ShotSceneLinkRead,
+    ProjectSceneLinkRead,
     ShotUpdate,
     ShotFrameImageCreate,
     ShotFrameImageRead,
     ShotFrameImageUpdate,
 )
+from app.utils.project_links import upsert_project_link
 
 router = APIRouter()
 details_router = APIRouter()
@@ -55,13 +60,113 @@ frames_router = APIRouter()
 SHOT_ORDER_FIELDS = {"index", "title", "status", "created_at", "updated_at"}
 DETAIL_ORDER_FIELDS = {"id"}
 DIALOG_ORDER_FIELDS = {"index", "id", "created_at", "updated_at"}
-LINK_ORDER_FIELDS = {"index", "id", "created_at", "updated_at"}
+LINK_ORDER_FIELDS = {"id", "created_at", "updated_at"}
 FRAME_IMAGE_ORDER_FIELDS = {"id", "frame_type", "created_at", "updated_at"}
+DOWNLOAD_URL_TEMPLATE = "/api/v1/studio/files/{file_id}/download"
+
+
+def _download_url(file_id: str) -> str:
+    return DOWNLOAD_URL_TEMPLATE.format(file_id=file_id)
+
+
+async def _resolve_scene_thumbnails(db: AsyncSession, *, scene_ids: list[str]) -> dict[str, str]:
+    """为 scene_id 批量解析缩略图：优先 front 视角，其次最新。"""
+    if not scene_ids:
+        return {}
+    stmt = select(SceneImage).where(
+        SceneImage.scene_id.in_(scene_ids),
+        SceneImage.file_id.is_not(None),
+    )
+    res = await db.execute(stmt)
+    rows = res.scalars().all()
+    best: dict[str, tuple[int, int, int, str]] = {}
+    for row in rows:
+        if not row.file_id:
+            continue
+        created_ts = int(row.created_at.timestamp()) if row.created_at else -1
+        score = (
+            1 if row.view_angle == AssetViewAngle.front else 0,
+            created_ts,
+            row.id,
+        )
+        current = best.get(row.scene_id)
+        if current is None or score > current[:3]:
+            best[row.scene_id] = (*score, row.file_id)
+    return {scene_id: _download_url(score[3]) for scene_id, score in best.items()}
+
+
+async def _resolve_prop_thumbnails(db: AsyncSession, *, prop_ids: list[str]) -> dict[str, str]:
+    """为 prop_id 批量解析缩略图：优先 front 视角，其次最新。"""
+    if not prop_ids:
+        return {}
+    stmt = select(PropImage).where(
+        PropImage.prop_id.in_(prop_ids),
+        PropImage.file_id.is_not(None),
+    )
+    res = await db.execute(stmt)
+    rows = res.scalars().all()
+    best: dict[str, tuple[int, int, int, str]] = {}
+    for row in rows:
+        if not row.file_id:
+            continue
+        created_ts = int(row.created_at.timestamp()) if row.created_at else -1
+        score = (
+            1 if row.view_angle == AssetViewAngle.front else 0,
+            created_ts,
+            row.id,
+        )
+        current = best.get(row.prop_id)
+        if current is None or score > current[:3]:
+            best[row.prop_id] = (*score, row.file_id)
+    return {prop_id: _download_url(score[3]) for prop_id, score in best.items()}
+
+
+async def _resolve_costume_thumbnails(db: AsyncSession, *, costume_ids: list[str]) -> dict[str, str]:
+    """为 costume_id 批量解析缩略图：优先 front 视角，其次最新。"""
+    if not costume_ids:
+        return {}
+    stmt = select(CostumeImage).where(
+        CostumeImage.costume_id.in_(costume_ids),
+        CostumeImage.file_id.is_not(None),
+    )
+    res = await db.execute(stmt)
+    rows = res.scalars().all()
+    best: dict[str, tuple[int, int, int, str]] = {}
+    for row in rows:
+        if not row.file_id:
+            continue
+        created_ts = int(row.created_at.timestamp()) if row.created_at else -1
+        score = (
+            1 if row.view_angle == AssetViewAngle.front else 0,
+            created_ts,
+            row.id,
+        )
+        current = best.get(row.costume_id)
+        if current is None or score > current[:3]:
+            best[row.costume_id] = (*score, row.file_id)
+    return {costume_id: _download_url(score[3]) for costume_id, score in best.items()}
 
 
 async def _ensure_chapter(db: AsyncSession, chapter_id: str) -> None:
     if await db.get(Chapter, chapter_id) is None:
         raise HTTPException(status_code=400, detail="Chapter not found")
+
+
+async def _ensure_project(db: AsyncSession, project_id: str) -> None:
+    if await db.get(Project, project_id) is None:
+        raise HTTPException(status_code=400, detail="Project not found")
+
+
+async def _ensure_chapter_optional(db: AsyncSession, chapter_id: str | None) -> None:
+    if chapter_id is None:
+        return
+    await _ensure_chapter(db, chapter_id)
+
+
+async def _ensure_shot_optional(db: AsyncSession, shot_id: str | None) -> None:
+    if shot_id is None:
+        return
+    await _ensure_shot(db, shot_id)
 
 
 async def _ensure_shot(db: AsyncSession, shot_id: str) -> None:
@@ -83,9 +188,9 @@ async def _ensure_character_optional(db: AsyncSession, character_id: str | None)
         raise HTTPException(status_code=400, detail="Character not found")
 
 
-async def _ensure_actor_image(db: AsyncSession, actor_image_id: str) -> None:
-    if await db.get(ActorImage, actor_image_id) is None:
-        raise HTTPException(status_code=400, detail="ActorImage not found")
+async def _ensure_actor(db: AsyncSession, actor_id: str) -> None:
+    if await db.get(Actor, actor_id) is None:
+        raise HTTPException(status_code=400, detail="Actor not found")
 
 
 async def _ensure_prop(db: AsyncSession, prop_id: str) -> None:
@@ -487,83 +592,69 @@ async def delete_shot_frame_image(
 
 
 @links_router.get(
-    "/actor-image",
-    response_model=ApiResponse[PaginatedData[ShotActorImageLinkRead]],
-    summary="镜头-演员形象关联列表（分页）",
+    "/actor",
+    response_model=ApiResponse[PaginatedData[ProjectActorLinkRead]],
+    summary="项目-章节-镜头-演员关联列表（分页）",
 )
-async def list_shot_actor_image_links(
+async def list_project_actor_links(
     db: AsyncSession = Depends(get_db),
+    project_id: str | None = Query(None),
+    chapter_id: str | None = Query(None),
     shot_id: str | None = Query(None),
-    actor_image_id: str | None = Query(None),
+    actor_id: str | None = Query(None),
     order: str | None = Query(None),
     is_desc: bool = Query(False),
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=100),
-) -> ApiResponse[PaginatedData[ShotActorImageLinkRead]]:
-    stmt = select(ShotActorImageLink)
+) -> ApiResponse[PaginatedData[ProjectActorLinkRead]]:
+    stmt = select(ProjectActorLink)
+    if project_id is not None:
+        stmt = stmt.where(ProjectActorLink.project_id == project_id)
+    if chapter_id is not None:
+        stmt = stmt.where(ProjectActorLink.chapter_id == chapter_id)
     if shot_id is not None:
-        stmt = stmt.where(ShotActorImageLink.shot_id == shot_id)
-    if actor_image_id is not None:
-        stmt = stmt.where(ShotActorImageLink.actor_image_id == actor_image_id)
-    stmt = apply_order(stmt, model=ShotActorImageLink, order=order, is_desc=is_desc, allow_fields=LINK_ORDER_FIELDS, default="index")
+        stmt = stmt.where(ProjectActorLink.shot_id == shot_id)
+    if actor_id is not None:
+        stmt = stmt.where(ProjectActorLink.actor_id == actor_id)
+    stmt = apply_order(stmt, model=ProjectActorLink, order=order, is_desc=is_desc, allow_fields=LINK_ORDER_FIELDS, default="id")
     items, total = await paginate(db, stmt=stmt, page=page, page_size=page_size)
-    return paginated_response([ShotActorImageLinkRead.model_validate(x) for x in items], page=page, page_size=page_size, total=total)
+    return paginated_response([ProjectActorLinkRead.model_validate(x) for x in items], page=page, page_size=page_size, total=total)
 
 
 @links_router.post(
-    "/actor-image",
-    response_model=ApiResponse[ShotActorImageLinkRead],
+    "/actor",
+    response_model=ApiResponse[ProjectActorLinkRead],
     status_code=status.HTTP_201_CREATED,
-    summary="创建镜头-演员形象关联",
+    summary="创建项目-章节-镜头-演员关联",
 )
-async def create_shot_actor_image_link(
-    body: ShotAssetLinkCreate,
+async def create_project_actor_link(
+    body: ProjectAssetLinkCreate,
     db: AsyncSession = Depends(get_db),
-) -> ApiResponse[ShotActorImageLinkRead]:
-    await _ensure_shot(db, body.shot_id)
-    await _ensure_actor_image(db, body.asset_id)
-    obj = ShotActorImageLink(
+) -> ApiResponse[ProjectActorLinkRead]:
+    await _ensure_actor(db, body.asset_id)
+    obj = await upsert_project_link(
+        db,
+        model=ProjectActorLink,
+        asset_field="actor_id",
+        asset_id=body.asset_id,
+        project_id=body.project_id,
+        chapter_id=body.chapter_id,
         shot_id=body.shot_id,
-        actor_image_id=body.asset_id,
-        index=body.index,
-        note=body.note,
     )
-    db.add(obj)
-    await db.flush()
-    await db.refresh(obj)
-    return success_response(ShotActorImageLinkRead.model_validate(obj), code=201)
+    return success_response(ProjectActorLinkRead.model_validate(obj), code=201)
 
-
-@links_router.patch(
-    "/actor-image/{link_id}",
-    response_model=ApiResponse[ShotActorImageLinkRead],
-    summary="更新镜头-演员形象关联",
-)
-async def update_shot_actor_image_link(
-    link_id: int,
-    body: ShotLinkUpdate,
-    db: AsyncSession = Depends(get_db),
-) -> ApiResponse[ShotActorImageLinkRead]:
-    obj = await db.get(ShotActorImageLink, link_id)
-    if obj is None:
-        raise HTTPException(status_code=404, detail="ShotActorImageLink not found")
-    for k, v in body.model_dump(exclude_unset=True).items():
-        setattr(obj, k, v)
-    await db.flush()
-    await db.refresh(obj)
-    return success_response(ShotActorImageLinkRead.model_validate(obj))
 
 
 @links_router.delete(
-    "/actor-image/{link_id}",
+    "/actor/{link_id}",
     response_model=ApiResponse[None],
-    summary="删除镜头-演员形象关联",
+    summary="删除项目-章节-镜头-演员关联",
 )
-async def delete_shot_actor_image_link(
+async def delete_project_actor_link(
     link_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[None]:
-    obj = await db.get(ShotActorImageLink, link_id)
+    obj = await db.get(ProjectActorLink, link_id)
     if obj is None:
         return success_response(None)
     await db.delete(obj)
@@ -573,82 +664,73 @@ async def delete_shot_actor_image_link(
 
 @links_router.get(
     "/scene",
-    response_model=ApiResponse[PaginatedData[ShotSceneLinkRead]],
-    summary="镜头-场景关联列表（分页）",
+    response_model=ApiResponse[PaginatedData[ProjectSceneLinkRead]],
+    summary="项目-章节-镜头-场景关联列表（分页）",
 )
-async def list_shot_scene_links(
+async def list_project_scene_links(
     db: AsyncSession = Depends(get_db),
+    project_id: str | None = Query(None),
+    chapter_id: str | None = Query(None),
     shot_id: str | None = Query(None),
     scene_id: str | None = Query(None),
     order: str | None = Query(None),
     is_desc: bool = Query(False),
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=100),
-) -> ApiResponse[PaginatedData[ShotSceneLinkRead]]:
-    stmt = select(ShotSceneLink)
+) -> ApiResponse[PaginatedData[ProjectSceneLinkRead]]:
+    stmt = select(ProjectSceneLink)
+    if project_id is not None:
+        stmt = stmt.where(ProjectSceneLink.project_id == project_id)
+    if chapter_id is not None:
+        stmt = stmt.where(ProjectSceneLink.chapter_id == chapter_id)
     if shot_id is not None:
-        stmt = stmt.where(ShotSceneLink.shot_id == shot_id)
+        stmt = stmt.where(ProjectSceneLink.shot_id == shot_id)
     if scene_id is not None:
-        stmt = stmt.where(ShotSceneLink.scene_id == scene_id)
-    stmt = apply_order(stmt, model=ShotSceneLink, order=order, is_desc=is_desc, allow_fields=LINK_ORDER_FIELDS, default="index")
+        stmt = stmt.where(ProjectSceneLink.scene_id == scene_id)
+    stmt = apply_order(stmt, model=ProjectSceneLink, order=order, is_desc=is_desc, allow_fields=LINK_ORDER_FIELDS, default="id")
     items, total = await paginate(db, stmt=stmt, page=page, page_size=page_size)
-    return paginated_response([ShotSceneLinkRead.model_validate(x) for x in items], page=page, page_size=page_size, total=total)
+    thumbnails = await _resolve_scene_thumbnails(db, scene_ids=[x.scene_id for x in items if x.scene_id])
+    payload = [
+        ProjectSceneLinkRead.model_validate(x).model_copy(update={"thumbnail": thumbnails.get(x.scene_id, "")})
+        for x in items
+    ]
+    return paginated_response(payload, page=page, page_size=page_size, total=total)
 
 
 @links_router.post(
     "/scene",
-    response_model=ApiResponse[ShotSceneLinkRead],
+    response_model=ApiResponse[ProjectSceneLinkRead],
     status_code=status.HTTP_201_CREATED,
-    summary="创建镜头-场景关联",
+    summary="创建项目-章节-镜头-场景关联",
 )
-async def create_shot_scene_link(
-    body: ShotAssetLinkCreate,
+async def create_project_scene_link(
+    body: ProjectAssetLinkCreate,
     db: AsyncSession = Depends(get_db),
-) -> ApiResponse[ShotSceneLinkRead]:
-    await _ensure_shot(db, body.shot_id)
+) -> ApiResponse[ProjectSceneLinkRead]:
     await _ensure_scene_optional(db, body.asset_id)
-    obj = ShotSceneLink(
+    obj = await upsert_project_link(
+        db,
+        model=ProjectSceneLink,
+        asset_field="scene_id",
+        asset_id=body.asset_id,
+        project_id=body.project_id,
+        chapter_id=body.chapter_id,
         shot_id=body.shot_id,
-        scene_id=body.asset_id,
-        index=body.index,
-        note=body.note,
     )
-    db.add(obj)
-    await db.flush()
-    await db.refresh(obj)
-    return success_response(ShotSceneLinkRead.model_validate(obj), code=201)
+    return success_response(ProjectSceneLinkRead.model_validate(obj), code=201)
 
-
-@links_router.patch(
-    "/scene/{link_id}",
-    response_model=ApiResponse[ShotSceneLinkRead],
-    summary="更新镜头-场景关联",
-)
-async def update_shot_scene_link(
-    link_id: int,
-    body: ShotLinkUpdate,
-    db: AsyncSession = Depends(get_db),
-) -> ApiResponse[ShotSceneLinkRead]:
-    obj = await db.get(ShotSceneLink, link_id)
-    if obj is None:
-        raise HTTPException(status_code=404, detail="ShotSceneLink not found")
-    for k, v in body.model_dump(exclude_unset=True).items():
-        setattr(obj, k, v)
-    await db.flush()
-    await db.refresh(obj)
-    return success_response(ShotSceneLinkRead.model_validate(obj))
 
 
 @links_router.delete(
     "/scene/{link_id}",
     response_model=ApiResponse[None],
-    summary="删除镜头-场景关联",
+    summary="删除项目-章节-镜头-场景关联",
 )
-async def delete_shot_scene_link(
+async def delete_project_scene_link(
     link_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[None]:
-    obj = await db.get(ShotSceneLink, link_id)
+    obj = await db.get(ProjectSceneLink, link_id)
     if obj is None:
         return success_response(None)
     await db.delete(obj)
@@ -658,82 +740,73 @@ async def delete_shot_scene_link(
 
 @links_router.get(
     "/prop",
-    response_model=ApiResponse[PaginatedData[ShotPropLinkRead]],
-    summary="镜头-道具关联列表（分页）",
+    response_model=ApiResponse[PaginatedData[ProjectPropLinkRead]],
+    summary="项目-章节-镜头-道具关联列表（分页）",
 )
-async def list_shot_prop_links(
+async def list_project_prop_links(
     db: AsyncSession = Depends(get_db),
+    project_id: str | None = Query(None),
+    chapter_id: str | None = Query(None),
     shot_id: str | None = Query(None),
     prop_id: str | None = Query(None),
     order: str | None = Query(None),
     is_desc: bool = Query(False),
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=100),
-) -> ApiResponse[PaginatedData[ShotPropLinkRead]]:
-    stmt = select(ShotPropLink)
+) -> ApiResponse[PaginatedData[ProjectPropLinkRead]]:
+    stmt = select(ProjectPropLink)
+    if project_id is not None:
+        stmt = stmt.where(ProjectPropLink.project_id == project_id)
+    if chapter_id is not None:
+        stmt = stmt.where(ProjectPropLink.chapter_id == chapter_id)
     if shot_id is not None:
-        stmt = stmt.where(ShotPropLink.shot_id == shot_id)
+        stmt = stmt.where(ProjectPropLink.shot_id == shot_id)
     if prop_id is not None:
-        stmt = stmt.where(ShotPropLink.prop_id == prop_id)
-    stmt = apply_order(stmt, model=ShotPropLink, order=order, is_desc=is_desc, allow_fields=LINK_ORDER_FIELDS, default="index")
+        stmt = stmt.where(ProjectPropLink.prop_id == prop_id)
+    stmt = apply_order(stmt, model=ProjectPropLink, order=order, is_desc=is_desc, allow_fields=LINK_ORDER_FIELDS, default="id")
     items, total = await paginate(db, stmt=stmt, page=page, page_size=page_size)
-    return paginated_response([ShotPropLinkRead.model_validate(x) for x in items], page=page, page_size=page_size, total=total)
+    thumbnails = await _resolve_prop_thumbnails(db, prop_ids=[x.prop_id for x in items if x.prop_id])
+    payload = [
+        ProjectPropLinkRead.model_validate(x).model_copy(update={"thumbnail": thumbnails.get(x.prop_id, "")})
+        for x in items
+    ]
+    return paginated_response(payload, page=page, page_size=page_size, total=total)
 
 
 @links_router.post(
     "/prop",
-    response_model=ApiResponse[ShotPropLinkRead],
+    response_model=ApiResponse[ProjectPropLinkRead],
     status_code=status.HTTP_201_CREATED,
-    summary="创建镜头-道具关联",
+    summary="创建项目-章节-镜头-道具关联",
 )
-async def create_shot_prop_link(
-    body: ShotAssetLinkCreate,
+async def create_project_prop_link(
+    body: ProjectAssetLinkCreate,
     db: AsyncSession = Depends(get_db),
-) -> ApiResponse[ShotPropLinkRead]:
-    await _ensure_shot(db, body.shot_id)
+) -> ApiResponse[ProjectPropLinkRead]:
     await _ensure_prop(db, body.asset_id)
-    obj = ShotPropLink(
+    obj = await upsert_project_link(
+        db,
+        model=ProjectPropLink,
+        asset_field="prop_id",
+        asset_id=body.asset_id,
+        project_id=body.project_id,
+        chapter_id=body.chapter_id,
         shot_id=body.shot_id,
-        prop_id=body.asset_id,
-        index=body.index,
-        note=body.note,
     )
-    db.add(obj)
-    await db.flush()
-    await db.refresh(obj)
-    return success_response(ShotPropLinkRead.model_validate(obj), code=201)
+    return success_response(ProjectPropLinkRead.model_validate(obj), code=201)
 
-
-@links_router.patch(
-    "/prop/{link_id}",
-    response_model=ApiResponse[ShotPropLinkRead],
-    summary="更新镜头-道具关联",
-)
-async def update_shot_prop_link(
-    link_id: int,
-    body: ShotLinkUpdate,
-    db: AsyncSession = Depends(get_db),
-) -> ApiResponse[ShotPropLinkRead]:
-    obj = await db.get(ShotPropLink, link_id)
-    if obj is None:
-        raise HTTPException(status_code=404, detail="ShotPropLink not found")
-    for k, v in body.model_dump(exclude_unset=True).items():
-        setattr(obj, k, v)
-    await db.flush()
-    await db.refresh(obj)
-    return success_response(ShotPropLinkRead.model_validate(obj))
 
 
 @links_router.delete(
     "/prop/{link_id}",
     response_model=ApiResponse[None],
-    summary="删除镜头-道具关联",
+    summary="删除项目-章节-镜头-道具关联",
 )
-async def delete_shot_prop_link(
+async def delete_project_prop_link(
     link_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[None]:
-    obj = await db.get(ShotPropLink, link_id)
+    obj = await db.get(ProjectPropLink, link_id)
     if obj is None:
         return success_response(None)
     await db.delete(obj)
@@ -743,82 +816,72 @@ async def delete_shot_prop_link(
 
 @links_router.get(
     "/costume",
-    response_model=ApiResponse[PaginatedData[ShotCostumeLinkRead]],
-    summary="镜头-服装关联列表（分页）",
+    response_model=ApiResponse[PaginatedData[ProjectCostumeLinkRead]],
+    summary="项目-章节-镜头-服装关联列表（分页）",
 )
-async def list_shot_costume_links(
+async def list_project_costume_links(
     db: AsyncSession = Depends(get_db),
+    project_id: str | None = Query(None),
+    chapter_id: str | None = Query(None),
     shot_id: str | None = Query(None),
     costume_id: str | None = Query(None),
     order: str | None = Query(None),
     is_desc: bool = Query(False),
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=100),
-) -> ApiResponse[PaginatedData[ShotCostumeLinkRead]]:
-    stmt = select(ShotCostumeLink)
+) -> ApiResponse[PaginatedData[ProjectCostumeLinkRead]]:
+    stmt = select(ProjectCostumeLink)
+    if project_id is not None:
+        stmt = stmt.where(ProjectCostumeLink.project_id == project_id)
+    if chapter_id is not None:
+        stmt = stmt.where(ProjectCostumeLink.chapter_id == chapter_id)
     if shot_id is not None:
-        stmt = stmt.where(ShotCostumeLink.shot_id == shot_id)
+        stmt = stmt.where(ProjectCostumeLink.shot_id == shot_id)
     if costume_id is not None:
-        stmt = stmt.where(ShotCostumeLink.costume_id == costume_id)
-    stmt = apply_order(stmt, model=ShotCostumeLink, order=order, is_desc=is_desc, allow_fields=LINK_ORDER_FIELDS, default="index")
+        stmt = stmt.where(ProjectCostumeLink.costume_id == costume_id)
+    stmt = apply_order(stmt, model=ProjectCostumeLink, order=order, is_desc=is_desc, allow_fields=LINK_ORDER_FIELDS, default="id")
     items, total = await paginate(db, stmt=stmt, page=page, page_size=page_size)
-    return paginated_response([ShotCostumeLinkRead.model_validate(x) for x in items], page=page, page_size=page_size, total=total)
+    thumbnails = await _resolve_costume_thumbnails(db, costume_ids=[x.costume_id for x in items if x.costume_id])
+    payload = [
+        ProjectCostumeLinkRead.model_validate(x).model_copy(update={"thumbnail": thumbnails.get(x.costume_id, "")})
+        for x in items
+    ]
+    return paginated_response(payload, page=page, page_size=page_size, total=total)
 
 
 @links_router.post(
     "/costume",
-    response_model=ApiResponse[ShotCostumeLinkRead],
+    response_model=ApiResponse[ProjectCostumeLinkRead],
     status_code=status.HTTP_201_CREATED,
-    summary="创建镜头-服装关联",
+    summary="创建项目-章节-镜头-服装关联",
 )
-async def create_shot_costume_link(
-    body: ShotAssetLinkCreate,
+async def create_project_costume_link(
+    body: ProjectAssetLinkCreate,
     db: AsyncSession = Depends(get_db),
-) -> ApiResponse[ShotCostumeLinkRead]:
-    await _ensure_shot(db, body.shot_id)
+) -> ApiResponse[ProjectCostumeLinkRead]:
     await _ensure_costume(db, body.asset_id)
-    obj = ShotCostumeLink(
+    obj = await upsert_project_link(
+        db,
+        model=ProjectCostumeLink,
+        asset_field="costume_id",
+        asset_id=body.asset_id,
+        project_id=body.project_id,
+        chapter_id=body.chapter_id,
         shot_id=body.shot_id,
-        costume_id=body.asset_id,
-        index=body.index,
-        note=body.note,
     )
-    db.add(obj)
-    await db.flush()
-    await db.refresh(obj)
-    return success_response(ShotCostumeLinkRead.model_validate(obj), code=201)
-
-
-@links_router.patch(
-    "/costume/{link_id}",
-    response_model=ApiResponse[ShotCostumeLinkRead],
-    summary="更新镜头-服装关联",
-)
-async def update_shot_costume_link(
-    link_id: int,
-    body: ShotLinkUpdate,
-    db: AsyncSession = Depends(get_db),
-) -> ApiResponse[ShotCostumeLinkRead]:
-    obj = await db.get(ShotCostumeLink, link_id)
-    if obj is None:
-        raise HTTPException(status_code=404, detail="ShotCostumeLink not found")
-    for k, v in body.model_dump(exclude_unset=True).items():
-        setattr(obj, k, v)
-    await db.flush()
-    await db.refresh(obj)
-    return success_response(ShotCostumeLinkRead.model_validate(obj))
+    return success_response(ProjectCostumeLinkRead.model_validate(obj), code=201)
 
 
 @links_router.delete(
     "/costume/{link_id}",
     response_model=ApiResponse[None],
-    summary="删除镜头-服装关联",
+    summary="删除项目-章节-镜头-服装关联",
 )
-async def delete_shot_costume_link(
+async def delete_project_costume_link(
     link_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[None]:
-    obj = await db.get(ShotCostumeLink, link_id)
+    obj = await db.get(ProjectCostumeLink, link_id)
     if obj is None:
         return success_response(None)
     await db.delete(obj)

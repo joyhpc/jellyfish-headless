@@ -4,8 +4,6 @@
 /* eslint-disable */
 export type AssetCreate = {
     id: string;
-    project_id?: (string | null);
-    chapter_id?: (string | null);
     name: string;
     description?: string;
     tags?: Array<string>;

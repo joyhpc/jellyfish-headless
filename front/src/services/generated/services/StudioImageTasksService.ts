@@ -9,26 +9,23 @@ import { OpenAPI } from '../core/OpenAPI';
 import { request as __request } from '../core/request';
 export class StudioImageTasksService {
     /**
-     * 演员形象/立绘图片生成（任务版）
-     * 为指定演员形象创建图片生成任务，并通过 `GenerationTaskLink` 关联。
-     *
-     * - path 参数 actor_image_id 表示 ActorImage.id
-     * - body.image_id 必须为该 ActorImage 下的 ActorImageImage.id
+     * 演员图片生成（任务版）
+     * 为指定演员创建图片生成任务，并通过 `GenerationTaskLink` 关联。
      * @returns ApiResponse_TaskCreated_ Successful Response
      * @throws ApiError
      */
-    public static createActorImageGenerationTaskApiV1StudioImageTasksActorImagesActorImageIdImageTasksPost({
-        actorImageId,
+    public static createActorImageGenerationTaskApiV1StudioImageTasksActorsActorIdImageTasksPost({
+        actorId,
         requestBody,
     }: {
-        actorImageId: string,
+        actorId: string,
         requestBody: StudioImageTaskRequest,
     }): CancelablePromise<ApiResponse_TaskCreated_> {
         return __request(OpenAPI, {
             method: 'POST',
-            url: '/api/v1/studio/image-tasks/actor-images/{actor_image_id}/image-tasks',
+            url: '/api/v1/studio/image-tasks/actors/{actor_id}/image-tasks',
             path: {
-                'actor_image_id': actorImageId,
+                'actor_id': actorId,
             },
             body: requestBody,
             mediaType: 'application/json',

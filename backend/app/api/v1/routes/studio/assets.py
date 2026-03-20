@@ -1,4 +1,4 @@
-"""资产相关 CRUD：ActorImage / Scene / Prop / Costume 及其图片表。"""
+"""资产相关 CRUD：Scene / Prop / Costume 及其图片表。"""
 
 from __future__ import annotations
 
@@ -9,8 +9,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.utils import apply_keyword_filter, apply_order, paginate
 from app.dependencies import get_db
 from app.models.studio import (
-    ActorImage,
-    ActorImageImage,
     AssetViewAngle,
     Costume,
     CostumeImage,
@@ -21,8 +19,6 @@ from app.models.studio import (
 )
 from app.schemas.common import ApiResponse, PaginatedData, paginated_response, success_response
 from app.schemas.studio.assets import (
-    ActorImageImageRead,
-    ActorImageRead,
     AssetCreate,
     AssetImageCreate,
     AssetImageUpdate,
@@ -51,10 +47,6 @@ DOWNLOAD_URL_TEMPLATE = "/api/v1/studio/files/{file_id}/download"
 
 def _asset_list_stmt(model: type, *, project_id: str | None, chapter_id: str | None):
     stmt = select(model)
-    if project_id is not None:
-        stmt = stmt.where(model.project_id == project_id)
-    if chapter_id is not None:
-        stmt = stmt.where(model.chapter_id == chapter_id)
     return stmt
 
 
@@ -105,209 +97,6 @@ async def _resolve_asset_thumbnails(
     return {parent_id: _download_url(score[3]) for parent_id, score in best.items()}
 
 
-# ---------- ActorImage ----------
-
-
-@router.get(
-    "/actor-images",
-    response_model=ApiResponse[PaginatedData[ActorImageRead]],
-    summary="演员形象列表（分页）",
-)
-async def list_actor_images(
-    db: AsyncSession = Depends(get_db),
-    project_id: str | None = Query(None),
-    chapter_id: str | None = Query(None),
-    q: str | None = Query(None, description="关键字，过滤 name/description"),
-    order: str | None = Query(None),
-    is_desc: bool = Query(False),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(10, ge=1, le=100),
-) -> ApiResponse[PaginatedData[ActorImageRead]]:
-    stmt = _asset_list_stmt(ActorImage, project_id=project_id, chapter_id=chapter_id)
-    stmt = apply_keyword_filter(stmt, q=q, fields=[ActorImage.name, ActorImage.description])
-    stmt = apply_order(stmt, model=ActorImage, order=order, is_desc=is_desc, allow_fields=ASSET_ORDER_FIELDS, default="created_at")
-    items, total = await paginate(db, stmt=stmt, page=page, page_size=page_size)
-    thumbnails = await _resolve_asset_thumbnails(
-        db,
-        image_model=ActorImageImage,
-        parent_field_name="actor_image_id",
-        parent_ids=[x.id for x in items],
-    )
-    payload = [
-        ActorImageRead.model_validate(x).model_copy(update={"thumbnail": thumbnails.get(x.id, "")})
-        for x in items
-    ]
-    return paginated_response(payload, page=page, page_size=page_size, total=total)
-
-
-@router.post(
-    "/actor-images",
-    response_model=ApiResponse[ActorImageRead],
-    status_code=status.HTTP_201_CREATED,
-    summary="创建演员形象",
-)
-async def create_actor_image(
-    body: AssetCreate,
-    db: AsyncSession = Depends(get_db),
-) -> ApiResponse[ActorImageRead]:
-    exists = await db.get(ActorImage, body.id)
-    if exists is not None:
-        raise HTTPException(status_code=400, detail=f"ActorImage with id={body.id} already exists")
-
-    obj = ActorImage(**body.model_dump())
-    db.add(obj)
-    await db.flush()
-    await db.refresh(obj)
-
-    angles = _default_view_angles(body.view_count)
-    for angle in angles:
-        db.add(
-            ActorImageImage(
-                actor_image_id=obj.id,
-                view_angle=angle,
-            )
-        )
-    if angles:
-        await db.flush()
-
-    return success_response(ActorImageRead.model_validate(obj), code=201)
-
-
-@router.get(
-    "/actor-images/{actor_image_id}",
-    response_model=ApiResponse[ActorImageRead],
-    summary="获取演员形象",
-)
-async def get_actor_image(
-    actor_image_id: str,
-    db: AsyncSession = Depends(get_db),
-) -> ApiResponse[ActorImageRead]:
-    obj = await db.get(ActorImage, actor_image_id)
-    if obj is None:
-        raise HTTPException(status_code=404, detail="ActorImage not found")
-    return success_response(ActorImageRead.model_validate(obj))
-
-
-@router.patch(
-    "/actor-images/{actor_image_id}",
-    response_model=ApiResponse[ActorImageRead],
-    summary="更新演员形象",
-)
-async def update_actor_image(
-    actor_image_id: str,
-    body: AssetUpdate,
-    db: AsyncSession = Depends(get_db),
-) -> ApiResponse[ActorImageRead]:
-    obj = await db.get(ActorImage, actor_image_id)
-    if obj is None:
-        raise HTTPException(status_code=404, detail="ActorImage not found")
-    for k, v in body.model_dump(exclude_unset=True).items():
-        setattr(obj, k, v)
-    await db.flush()
-    await db.refresh(obj)
-    return success_response(ActorImageRead.model_validate(obj))
-
-
-@router.delete(
-    "/actor-images/{actor_image_id}",
-    response_model=ApiResponse[None],
-    summary="删除演员形象",
-)
-async def delete_actor_image(
-    actor_image_id: str,
-    db: AsyncSession = Depends(get_db),
-) -> ApiResponse[None]:
-    obj = await db.get(ActorImage, actor_image_id)
-    if obj is None:
-        return success_response(None)
-    await db.delete(obj)
-    await db.flush()
-    return success_response(None)
-
-
-# --- ActorImage images ---
-
-
-@router.get(
-    "/actor-images/{actor_image_id}/images",
-    response_model=ApiResponse[PaginatedData[ActorImageImageRead]],
-    summary="演员形象图片列表（分页）",
-)
-async def list_actor_image_images(
-    actor_image_id: str,
-    db: AsyncSession = Depends(get_db),
-    order: str | None = Query(None),
-    is_desc: bool = Query(False),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(10, ge=1, le=100),
-) -> ApiResponse[PaginatedData[ActorImageImageRead]]:
-    stmt = select(ActorImageImage).where(ActorImageImage.actor_image_id == actor_image_id)
-    stmt = apply_order(stmt, model=ActorImageImage, order=order, is_desc=is_desc, allow_fields=IMAGE_ORDER_FIELDS, default="id")
-    items, total = await paginate(db, stmt=stmt, page=page, page_size=page_size)
-    return paginated_response([ActorImageImageRead.model_validate(x) for x in items], page=page, page_size=page_size, total=total)
-
-
-@router.post(
-    "/actor-images/{actor_image_id}/images",
-    response_model=ApiResponse[ActorImageImageRead],
-    status_code=status.HTTP_201_CREATED,
-    summary="创建演员形象图片",
-)
-async def create_actor_image_image(
-    actor_image_id: str,
-    body: AssetImageCreate,
-    db: AsyncSession = Depends(get_db),
-) -> ApiResponse[ActorImageImageRead]:
-    parent = await db.get(ActorImage, actor_image_id)
-    if parent is None:
-        raise HTTPException(status_code=404, detail="ActorImage not found")
-    obj = ActorImageImage(actor_image_id=actor_image_id, **body.model_dump())
-    db.add(obj)
-    await db.flush()
-    await db.refresh(obj)
-    return success_response(ActorImageImageRead.model_validate(obj), code=201)
-
-
-@router.patch(
-    "/actor-images/{actor_image_id}/images/{image_id}",
-    response_model=ApiResponse[ActorImageImageRead],
-    summary="更新演员形象图片",
-)
-async def update_actor_image_image(
-    actor_image_id: str,
-    image_id: int,
-    body: AssetImageUpdate,
-    db: AsyncSession = Depends(get_db),
-) -> ApiResponse[ActorImageImageRead]:
-    obj = await db.get(ActorImageImage, image_id)
-    if obj is None or obj.actor_image_id != actor_image_id:
-        raise HTTPException(status_code=404, detail="ActorImageImage not found")
-    update_data = body.model_dump(exclude_unset=True)
-    for k, v in update_data.items():
-        setattr(obj, k, v)
-    await db.flush()
-    await db.refresh(obj)
-    return success_response(ActorImageImageRead.model_validate(obj))
-
-
-@router.delete(
-    "/actor-images/{actor_image_id}/images/{image_id}",
-    response_model=ApiResponse[None],
-    summary="删除演员形象图片",
-)
-async def delete_actor_image_image(
-    actor_image_id: str,
-    image_id: int,
-    db: AsyncSession = Depends(get_db),
-) -> ApiResponse[None]:
-    obj = await db.get(ActorImageImage, image_id)
-    if obj is None or obj.actor_image_id != actor_image_id:
-        return success_response(None)
-    await db.delete(obj)
-    await db.flush()
-    return success_response(None)
-
-
 # ---------- Scene ----------
 
 
@@ -318,15 +107,13 @@ async def delete_actor_image_image(
 )
 async def list_scenes(
     db: AsyncSession = Depends(get_db),
-    project_id: str | None = Query(None),
-    chapter_id: str | None = Query(None),
     q: str | None = Query(None, description="关键字，过滤 name/description"),
     order: str | None = Query(None),
     is_desc: bool = Query(False),
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=100),
 ) -> ApiResponse[PaginatedData[SceneRead]]:
-    stmt = _asset_list_stmt(Scene, project_id=project_id, chapter_id=chapter_id)
+    stmt = _asset_list_stmt(Scene, project_id=None, chapter_id=None)
     stmt = apply_keyword_filter(stmt, q=q, fields=[Scene.name, Scene.description])
     stmt = apply_order(stmt, model=Scene, order=order, is_desc=is_desc, allow_fields=ASSET_ORDER_FIELDS, default="created_at")
     items, total = await paginate(db, stmt=stmt, page=page, page_size=page_size)
@@ -518,15 +305,13 @@ async def delete_scene_image(
 )
 async def list_props(
     db: AsyncSession = Depends(get_db),
-    project_id: str | None = Query(None),
-    chapter_id: str | None = Query(None),
     q: str | None = Query(None, description="关键字，过滤 name/description"),
     order: str | None = Query(None),
     is_desc: bool = Query(False),
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=100),
 ) -> ApiResponse[PaginatedData[PropRead]]:
-    stmt = _asset_list_stmt(Prop, project_id=project_id, chapter_id=chapter_id)
+    stmt = _asset_list_stmt(Prop, project_id=None, chapter_id=None)
     stmt = apply_keyword_filter(stmt, q=q, fields=[Prop.name, Prop.description])
     stmt = apply_order(stmt, model=Prop, order=order, is_desc=is_desc, allow_fields=ASSET_ORDER_FIELDS, default="created_at")
     items, total = await paginate(db, stmt=stmt, page=page, page_size=page_size)
@@ -718,15 +503,13 @@ async def delete_prop_image(
 )
 async def list_costumes(
     db: AsyncSession = Depends(get_db),
-    project_id: str | None = Query(None),
-    chapter_id: str | None = Query(None),
     q: str | None = Query(None, description="关键字，过滤 name/description"),
     order: str | None = Query(None),
     is_desc: bool = Query(False),
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=100),
 ) -> ApiResponse[PaginatedData[CostumeRead]]:
-    stmt = _asset_list_stmt(Costume, project_id=project_id, chapter_id=chapter_id)
+    stmt = _asset_list_stmt(Costume, project_id=None, chapter_id=None)
     stmt = apply_keyword_filter(stmt, q=q, fields=[Costume.name, Costume.description])
     stmt = apply_order(stmt, model=Costume, order=order, is_desc=is_desc, allow_fields=ASSET_ORDER_FIELDS, default="created_at")
     items, total = await paginate(db, stmt=stmt, page=page, page_size=page_size)

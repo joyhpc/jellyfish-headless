@@ -6,7 +6,8 @@ import json
 import logging
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
+from langchain_core.runnables import Runnable
 from pydantic import BaseModel, Field
 
 from app.chains.agents import (
@@ -16,32 +17,25 @@ from app.chains.agents import (
     VariantAnalyzerAgent,
     ConsistencyCheckerAgent,
     OutputCompilerAgent,
+    ScriptOptimizerAgent,
+    ShotElementExtractorAgent,
 )
 from app.chains.agents.script_processing_agents import (
     ScriptDivisionResult,
     ShotElementExtractionResult,
     EntityMergeResult,
     VariantAnalysisResult,
-    ConsistencyCheckResult,
+    ScriptConsistencyCheckResult,
     OutputCompileResult,
+    ScriptOptimizationResult,
+    StudioScriptExtractionDraft,
 )
+from app.dependencies import get_llm
 from app.schemas.common import ApiResponse, success_response
-from langchain_openai import ChatOpenAI
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/script-processing", tags=["script-processing"])
-
-# 初始化 LLM（可从配置获取）
-_llm = None
-
-
-def get_llm() -> ChatOpenAI:
-    """获取或创建 LLM 实例。"""
-    global _llm
-    if _llm is None:
-        _llm = ChatOpenAI(model="gpt-4", temperature=0)
-    return _llm
 
 
 # ============================================================================
@@ -57,9 +51,16 @@ class ScriptDividerRequest(BaseModel):
     "/divide",
     response_model=ApiResponse[ScriptDivisionResult],
     summary="将剧本分割为多个镜头",
-    description="输入完整剧本文本，输出分镜列表（镜头序号、行号、预览、地点、时间、主要角色）"
+    description=(
+        "输入完整剧本文本，输出分镜列表（index/start_line/end_line/script_excerpt/"
+        "scene_name/time_of_day/character_names_in_text）。"
+        "注意：此阶段不强制稳定ID，角色以“称呼/名字”弱信息输出，稳定ID在合并阶段统一分配。"
+    )
 )
-async def divide_script(request: ScriptDividerRequest) -> ApiResponse[ScriptDivisionResult]:
+async def divide_script(
+    request: ScriptDividerRequest,
+    llm: Runnable = Depends(get_llm),
+) -> ApiResponse[ScriptDivisionResult]:
     """
     将完整剧本文本自动分割为多个镜头。
     
@@ -67,12 +68,11 @@ async def divide_script(request: ScriptDividerRequest) -> ApiResponse[ScriptDivi
     - script_text: 完整剧本文本
     
     返回：ScriptDivisionResult
-    - shots: 分镜列表，包含每个镜头的起止行号、预览文本、推断的地点和时间
+    - shots: 分镜列表，包含每个镜头的 index、起止行号、script_excerpt、scene_name、time_of_day、character_names_in_text
     - total_shots: 总镜头数
     - notes: 拆分说明（可选）
     """
     try:
-        llm = get_llm()
         agent = ScriptDividerAgent(llm)
         agent.load_skill("script_divider")
         
@@ -92,43 +92,57 @@ async def divide_script(request: ScriptDividerRequest) -> ApiResponse[ScriptDivi
 
 class ShotElementExtractionRequest(BaseModel):
     """镜头元素提取请求。"""
-    shot_index: int = Field(..., description="镜头序号", ge=1)
+    index: int = Field(..., description="镜头序号（章节内唯一）", ge=1)
     shot_text: str = Field(..., description="镜头的文本内容", min_length=1)
     context_summary: str | None = Field(None, description="前文摘要（可选）")
+    shot_division: dict[str, Any] | None = Field(
+        None,
+        description="分镜元信息（可选；来自 ScriptDivider 的 ShotDivision 序列化）",
+    )
 
 
 @router.post(
     "/extract-elements",
     response_model=ApiResponse[ShotElementExtractionResult],
     summary="从单个镜头提取信息",
-    description="输入镜头文本，输出该镜头的角色、场景、服装、道具、对白、动作"
+    deprecated=True,
+    description=(
+        "[已弃用] 旧版逐镜提取接口。新流程请使用 /extract（项目级提取，直接输出最终结果）。"
+    )
 )
 async def extract_shot_elements(
     request: ShotElementExtractionRequest,
+    llm: Runnable = Depends(get_llm),
 ) -> ApiResponse[ShotElementExtractionResult]:
     """
     从单个镜头的文本中提取关键信息。
     
     请求体：
-    - shot_index: 镜头序号
+    - index: 镜头序号
     - shot_text: 镜头文本内容
     - context_summary: 前文摘要（可选）
+    - shot_division: 分镜元信息（可选，来自 ScriptDivider 的 ShotDivision）
     
     返回：ShotElementExtractionResult
-    - shot_index: 镜头序号
-    - elements: 提取的元素（角色、地点、服装、道具、对白、动作）
+    - index: 镜头序号
+    - shot_division: 分镜元信息（可选回填）
+    - elements: 提取的元素（升级版）
+      - 基础索引：character_keys/scene_keys/costume_keys/prop_keys
+      - 细粒度：characters_detailed/props_detailed/scene_detailed
+      - 保留字段：dialogue_lines/actions
+      - 辅助字段：shot_type_hints/confidence_breakdown
     - confidence: 提取置信度 (0-1)
     - notes: 提取说明（可选）
     """
     try:
-        llm = get_llm()
-        agent = ElementExtractorAgent(llm)
+        agent = ShotElementExtractorAgent(llm)
         agent.load_skill("shot_element_extractor")
         
         result = agent.extract({
-            "shot_index": request.shot_index,
+            "index": request.index,
             "shot_text": request.shot_text,
-            "context_summary": request.context_summary or ""
+            "context_summary": request.context_summary or "",
+            "shot_division_json": json.dumps(request.shot_division or {}, ensure_ascii=False),
         })
         return success_response(data=result)
     except Exception as e:
@@ -153,36 +167,61 @@ class EntityMergerRequest(BaseModel):
         None,
         description="历史实体库（可选，用于增量合并）"
     )
+    script_division: dict[str, Any] | None = Field(
+        None,
+        description="脚本分镜结果（可选；ScriptDivisionResult 序列化），用于定位与统计",
+    )
+    previous_merge: dict[str, Any] | None = Field(
+        None,
+        description="上一次合并结果（可选；EntityMergeResult 序列化），用于冲突重试合并",
+    )
+    conflict_resolutions: list[dict[str, Any]] | None = Field(
+        None,
+        description="冲突解决建议列表（可选；用于冲突重试合并）",
+    )
 
 
 @router.post(
     "/merge-entities",
     response_model=ApiResponse[EntityMergeResult],
     summary="合并多镜头的实体信息",
-    description="输入全部分镜提取结果，输出合并后的角色库/场景库/道具库"
+    description=(
+        "输入全部分镜提取结果（可选带上脚本分镜与历史实体库），输出合并后的实体库："
+        "角色库/地点库/场景库/道具库（静态画像 + 变体列表）。"
+        "该步骤会统一分配稳定ID（如 char_001/loc_001/prop_001/scene_001）。"
+        "当提供 previous_merge 与 conflict_resolutions 时，将进行冲突重试合并，优先消解 conflicts 并尽量保持 ID 稳定。"
+    )
 )
-async def merge_entities(request: EntityMergerRequest) -> ApiResponse[EntityMergeResult]:
+async def merge_entities(
+    request: EntityMergerRequest,
+    llm: Runnable = Depends(get_llm),
+) -> ApiResponse[EntityMergeResult]:
     """
     将多个镜头的提取结果合并，统一实体定义。
     
     请求体：
     - all_shot_extractions: 所有镜头的提取结果
     - historical_library: 历史实体库（可选，用于增量更新）
+    - script_division: 脚本分镜结果（可选，用于定位与统计）
+    - previous_merge: 上一次合并结果（可选；用于冲突重试合并）
+    - conflict_resolutions: 冲突解决建议列表（可选；用于冲突重试合并）
     
     返回：EntityMergeResult
-    - merged_library: 合并后的实体库（角色、场景、道具）
+    - merged_library: 合并后的实体库（characters/locations/scenes/props，含 variants）
     - merge_stats: 合并统计信息
     - conflicts: 发现的冲突/待处理项
     - notes: 合并说明（可选）
     """
     try:
-        llm = get_llm()
         agent = EntityMergerAgent(llm)
         agent.load_skill("entity_merger")
         
         result = agent.extract({
             "all_extractions_json": json.dumps(request.all_shot_extractions, ensure_ascii=False),
-            "historical_library_json": json.dumps(request.historical_library or {}, ensure_ascii=False)
+            "historical_library_json": json.dumps(request.historical_library or {}, ensure_ascii=False),
+            "script_division_json": json.dumps(request.script_division or {}, ensure_ascii=False),
+            "previous_merge_json": json.dumps(request.previous_merge or {}, ensure_ascii=False),
+            "conflict_resolutions_json": json.dumps(request.conflict_resolutions or [], ensure_ascii=False),
         })
         return success_response(data=result)
     except Exception as e:
@@ -201,11 +240,15 @@ class VariantAnalysisRequest(BaseModel):
     """变体分析请求。"""
     merged_library: dict[str, Any] = Field(
         ...,
-        description="合并后的实体库（EntityLibrary 的序列化形式）"
+        description="合并后的实体库（EntityLibrary 的序列化形式；来自 EntityMerger 输出的 merged_library）"
     )
     all_shot_extractions: list[dict[str, Any]] = Field(
         ...,
         description="所有镜头提取结果"
+    )
+    script_division: dict[str, Any] | None = Field(
+        None,
+        description="脚本分镜结果（可选；ScriptDivisionResult 序列化），用于章节/段落分组",
     )
 
 
@@ -213,15 +256,19 @@ class VariantAnalysisRequest(BaseModel):
     "/analyze-variants",
     response_model=ApiResponse[VariantAnalysisResult],
     summary="分析服装/外形变体",
-    description="检测角色服装变化，构建演变时间线，生成变体建议"
+    description="检测角色服装/外形变化，构建演变时间线，生成章节变体建议列表与变体建议。"
 )
-async def analyze_variants(request: VariantAnalysisRequest) -> ApiResponse[VariantAnalysisResult]:
+async def analyze_variants(
+    request: VariantAnalysisRequest,
+    llm: Runnable = Depends(get_llm),
+) -> ApiResponse[VariantAnalysisResult]:
     """
     分析实体的变体（特别是角色服装变化）。
     
     请求体：
     - merged_library: 合并后的实体库
     - all_shot_extractions: 所有镜头提取结果
+    - script_division: 脚本分镜结果（可选，用于章节/段落分组）
     
     返回：VariantAnalysisResult
     - costume_timelines: 各角色的服装演变时间线
@@ -230,13 +277,13 @@ async def analyze_variants(request: VariantAnalysisRequest) -> ApiResponse[Varia
     - notes: 分析说明（可选）
     """
     try:
-        llm = get_llm()
         agent = VariantAnalyzerAgent(llm)
         agent.load_skill("variant_analyzer")
         
         result = agent.extract({
             "merged_library_json": json.dumps(request.merged_library, ensure_ascii=False),
-            "all_extractions_json": json.dumps(request.all_shot_extractions, ensure_ascii=False)
+            "all_extractions_json": json.dumps(request.all_shot_extractions, ensure_ascii=False),
+            "script_division_json": json.dumps(request.script_division or {}, ensure_ascii=False),
         })
         return success_response(data=result)
     except Exception as e:
@@ -248,50 +295,41 @@ async def analyze_variants(request: VariantAnalysisRequest) -> ApiResponse[Varia
 
 
 # ============================================================================
-# 5. ConsistencyCheckerAgent - 一致性检查
+# 5. ConsistencyCheckerAgent - 一致性检查（新流程：基于原文）
 # ============================================================================
 
-class ConsistencyCheckRequest(BaseModel):
-    """一致性检查请求。"""
-    merged_library: dict[str, Any] = Field(
-        ...,
-        description="合并后的实体库"
-    )
-    all_shot_extractions: list[dict[str, Any]] = Field(
-        ...,
-        description="所有镜头提取结果"
-    )
+class ScriptConsistencyCheckRequest(BaseModel):
+    """一致性检查请求（角色混淆）。"""
+    script_text: str = Field(..., description="完整剧本文本", min_length=1)
 
 
 @router.post(
     "/check-consistency",
-    response_model=ApiResponse[ConsistencyCheckResult],
-    summary="检查文本一致性",
-    description="发现并报告矛盾点、名字冲突、逻辑问题"
+    response_model=ApiResponse[ScriptConsistencyCheckResult],
+    summary="检查角色混淆一致性（基于原文）",
+    description="检测同一角色在不同段落/镜头被赋予不同身份/行为主体导致混淆，并给出修改建议。"
 )
-async def check_consistency(request: ConsistencyCheckRequest) -> ApiResponse[ConsistencyCheckResult]:
+async def check_consistency(
+    request: ScriptConsistencyCheckRequest,
+    llm: Runnable = Depends(get_llm),
+) -> ApiResponse[ScriptConsistencyCheckResult]:
     """
     检查实体定义与分镜内容的一致性。
     
     请求体：
-    - merged_library: 合并后的实体库
-    - all_shot_extractions: 所有镜头提取结果
+    - script_text: 完整剧本文本
     
-    返回：ConsistencyCheckResult
-    - warnings: 一致性问题列表（包含类型、严重程度、描述、建议）
-    - total_issues: 问题总数
-    - critical_issues: 严重问题数
-    - consistency_score: 一致性评分（0-100）
-    - notes: 检查说明（可选）
+    返回：ScriptConsistencyCheckResult
+    - issues: 角色混淆问题列表（含 description/suggestion/affected_lines）
+    - has_issues: 是否发现问题
+    - summary: 总结（可选）
     """
     try:
-        llm = get_llm()
         agent = ConsistencyCheckerAgent(llm)
         agent.load_skill("consistency_checker")
         
         result = agent.extract({
-            "merged_library_json": json.dumps(request.merged_library, ensure_ascii=False),
-            "all_extractions_json": json.dumps(request.all_shot_extractions, ensure_ascii=False)
+            "script_text": request.script_text,
         })
         return success_response(data=result)
     except Exception as e:
@@ -303,59 +341,86 @@ async def check_consistency(request: ConsistencyCheckRequest) -> ApiResponse[Con
 
 
 # ============================================================================
-# 6. OutputCompilerAgent - 最终编译
+# 6. ScriptOptimizerAgent - 剧本优化（非主线，按需触发）
 # ============================================================================
 
-class OutputCompileRequest(BaseModel):
-    """输出编译请求。"""
-    script_division: dict[str, Any] = Field(..., description="脚本分镜结果")
-    element_extractions: list[dict[str, Any]] = Field(..., description="元素提取结果列表")
-    entity_merge: dict[str, Any] = Field(..., description="实体合并结果")
-    variant_analysis: dict[str, Any] = Field(..., description="变体分析结果")
-    consistency_check: dict[str, Any] = Field(..., description="一致性检查结果")
+class ScriptOptimizeRequest(BaseModel):
+    """剧本优化请求（基于一致性检查结果）。"""
+    script_text: str = Field(..., description="原文剧本文本", min_length=1)
+    consistency: dict[str, Any] = Field(..., description="一致性检查输出（ScriptConsistencyCheckResult 序列化）")
 
 
 @router.post(
-    "/compile-output",
-    response_model=ApiResponse[OutputCompileResult],
-    summary="编译最终输出",
-    description="汇总所有处理结果，生成项目JSON和表格数据"
+    "/optimize-script",
+    response_model=ApiResponse[ScriptOptimizationResult],
+    summary="基于一致性检查优化剧本",
+    description="将一致性检查输出及原文作为输入，生成优化后的剧本（尽量少改，只改与角色混淆 issues 相关段落）。"
 )
-async def compile_output(request: OutputCompileRequest) -> ApiResponse[OutputCompileResult]:
+async def optimize_script(
+    request: ScriptOptimizeRequest,
+    llm: Runnable = Depends(get_llm),
+) -> ApiResponse[ScriptOptimizationResult]:
     """
-    汇总所有Agent的输出，生成最终的项目文件。
-    
-    请求体：
-    - script_division: 脚本分镜结果
-    - element_extractions: 所有镜头的元素提取结果
-    - entity_merge: 实体合并结果
-    - variant_analysis: 变体分析结果
-    - consistency_check: 一致性检查结果
-    
-    返回：OutputCompileResult
-    - project_json: 完整项目JSON（包含元数据、实体、镜头等）
-    - tables: 可导出的表格列表（角色表、场景表、镜头表等）
-    - export_stats: 导出统计信息
-    - summary: 项目总结
+    输入原文 + 一致性检查输出，生成优化后的剧本。
     """
     try:
-        llm = get_llm()
-        agent = OutputCompilerAgent(llm)
-        agent.load_skill("output_compiler")
+        agent = ScriptOptimizerAgent(llm)
+        agent.load_skill("script_optimizer")
         
         result = agent.extract({
-            "script_division_json": json.dumps(request.script_division, ensure_ascii=False),
-            "element_extractions_json": json.dumps(request.element_extractions, ensure_ascii=False),
-            "entity_merge_json": json.dumps(request.entity_merge, ensure_ascii=False),
-            "variant_analysis_json": json.dumps(request.variant_analysis, ensure_ascii=False),
-            "consistency_check_json": json.dumps(request.consistency_check, ensure_ascii=False)
+            "script_text": request.script_text,
+            "consistency_json": json.dumps(request.consistency, ensure_ascii=False),
         })
         return success_response(data=result)
     except Exception as e:
-        logger.error(f"Output compilation failed: {e}")
+        logger.error(f"Script optimization failed: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to compile output: {str(e)}"
+            detail=f"Failed to optimize script: {str(e)}"
+        )
+
+
+# ============================================================================
+# 7. ElementExtractorAgent - 项目级提取（最终输出）
+# ============================================================================
+
+class ScriptExtractRequest(BaseModel):
+    """项目级信息提取请求（最终输出）。"""
+    project_id: str = Field(..., description="项目 ID", min_length=1)
+    chapter_id: str = Field(..., description="章节 ID", min_length=1)
+    script_text: str = Field(..., description="剧本文本（可为优化后版本）", min_length=1)
+    script_division: dict[str, Any] = Field(..., description="分镜结果（ScriptDivisionResult 序列化）")
+    consistency: dict[str, Any] | None = Field(None, description="一致性检查结果（可选；ScriptConsistencyCheckResult 序列化）")
+
+
+@router.post(
+    "/extract",
+    response_model=ApiResponse[StudioScriptExtractionDraft],
+    summary="项目级信息提取（最终输出）",
+    description="输入剧本文本+分镜结果（可选带一致性检查结果），输出可导入 Studio 的草稿结构（name-based，ID 由导入接口生成）。"
+)
+async def extract_script(
+    request: ScriptExtractRequest,
+    llm: Runnable = Depends(get_llm),
+) -> ApiResponse[StudioScriptExtractionDraft]:
+    try:
+        agent = ElementExtractorAgent(llm)
+        agent.load_skill("script_extractor")
+        result = agent.extract(
+            {
+                "project_id": request.project_id,
+                "chapter_id": request.chapter_id,
+                "script_text": request.script_text,
+                "script_division_json": json.dumps(request.script_division, ensure_ascii=False),
+                "consistency_json": json.dumps(request.consistency or {}, ensure_ascii=False),
+            }
+        )
+        return success_response(data=result)
+    except Exception as e:
+        logger.error(f"Script extraction failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to extract script: {str(e)}",
         )
 
 
@@ -366,23 +431,27 @@ async def compile_output(request: OutputCompileRequest) -> ApiResponse[OutputCom
 class FullProcessRequest(BaseModel):
     """完整工作流请求。"""
     script_text: str = Field(..., description="完整剧本文本", min_length=1)
+    project_id: str = Field(..., description="项目 ID", min_length=1)
+    chapter_id: str = Field(..., description="章节 ID", min_length=1)
+    auto_optimize: bool = Field(True, description="发现角色混淆问题时是否自动优化剧本")
 
 
 @router.post(
     "/full-process",
-    response_model=ApiResponse[OutputCompileResult],
+    response_model=ApiResponse[StudioScriptExtractionDraft],
     summary="完整工作流处理",
-    description="从剧本文本开始，经过6个Agent的处理，输出完整项目结果"
+    description="新流程：一致性检查→（可选优化）→分镜→项目级信息提取（最终输出）"
 )
-async def full_process(request: FullProcessRequest) -> ApiResponse[OutputCompileResult]:
+async def full_process(
+    request: FullProcessRequest,
+    llm: Runnable = Depends(get_llm),
+) -> ApiResponse[StudioScriptExtractionDraft]:
     """
-    完整的脚本处理工作流：
-    1. 分镜分割
-    2. 逐镜信息提取
-    3. 实体合并
-    4. 变体分析
-    5. 一致性检查
-    6. 最终编译
+    完整的脚本处理工作流（新流程）：
+    1. 一致性检查（角色混淆）
+    2. 若发现问题且 auto_optimize=true：剧本优化
+    3. 分镜分割
+    4. 项目级信息提取（最终输出）
     
     请求体：
     - script_text: 完整剧本文本
@@ -390,71 +459,48 @@ async def full_process(request: FullProcessRequest) -> ApiResponse[OutputCompile
     返回：OutputCompileResult（最终编译结果）
     """
     try:
-        llm = get_llm()
-        
-        # 1. 分镜
-        logger.info("Step 1: Dividing script...")
-        divider = ScriptDividerAgent(llm)
-        divider.load_skill("script_divider")
-        division = divider.extract({"script_text": request.script_text})
-        
-        # 2. 逐镜提取
-        logger.info(f"Step 2: Extracting {len(division.shots)} shots...")
-        extractor = ElementExtractorAgent(llm)
-        extractor.load_skill("shot_element_extractor")
-        extractions = []
-        
-        for shot in division.shots:
-            # 假设能够从原文中提取对应的镜头文本
-            # 这里使用preview_text作为shot_text的简化版本
-            result = extractor.extract({
-                "shot_index": shot.shot_index,
-                "shot_text": shot.preview_text,
-                "context_summary": shot.preview_text
-            })
-            extractions.append(result.model_dump())
-        
-        # 3. 实体合并
-        logger.info("Step 3: Merging entities...")
-        merger = EntityMergerAgent(llm)
-        merger.load_skill("entity_merger")
-        merged = merger.extract({
-            "all_extractions_json": json.dumps(extractions, ensure_ascii=False),
-            "historical_library_json": json.dumps({}, ensure_ascii=False)
-        })
-        
-        # 4. 变体分析
-        logger.info("Step 4: Analyzing variants...")
-        analyzer = VariantAnalyzerAgent(llm)
-        analyzer.load_skill("variant_analyzer")
-        variants = analyzer.extract({
-            "merged_library_json": json.dumps(merged.merged_library.model_dump(), ensure_ascii=False),
-            "all_extractions_json": json.dumps(extractions, ensure_ascii=False)
-        })
-        
-        # 5. 一致性检查
-        logger.info("Step 5: Checking consistency...")
+        # 1. 一致性检查
+        logger.info("Step 1: Consistency check (character confusion)...")
         checker = ConsistencyCheckerAgent(llm)
         checker.load_skill("consistency_checker")
-        consistency = checker.extract({
-            "merged_library_json": json.dumps(merged.merged_library.model_dump(), ensure_ascii=False),
-            "all_extractions_json": json.dumps(extractions, ensure_ascii=False)
-        })
-        
-        # 6. 最终编译
-        logger.info("Step 6: Compiling output...")
-        compiler = OutputCompilerAgent(llm)
-        compiler.load_skill("output_compiler")
-        final_output = compiler.extract({
-            "script_division_json": json.dumps(division.model_dump(), ensure_ascii=False),
-            "element_extractions_json": json.dumps(extractions, ensure_ascii=False),
-            "entity_merge_json": json.dumps(merged.model_dump(), ensure_ascii=False),
-            "variant_analysis_json": json.dumps(variants.model_dump(), ensure_ascii=False),
-            "consistency_check_json": json.dumps(consistency.model_dump(), ensure_ascii=False)
-        })
-        
+        consistency = checker.extract({"script_text": request.script_text})
+
+        # 2. 可选优化
+        script_text = request.script_text
+        if request.auto_optimize and consistency.has_issues:
+            logger.info("Step 2: Optimizing script...")
+            optimizer = ScriptOptimizerAgent(llm)
+            optimizer.load_skill("script_optimizer")
+            optimized = optimizer.extract(
+                {
+                    "script_text": request.script_text,
+                    "consistency_json": json.dumps(consistency.model_dump(), ensure_ascii=False),
+                }
+            )
+            if optimized.optimized_script_text.strip():
+                script_text = optimized.optimized_script_text
+
+        # 3. 分镜
+        logger.info("Step 3: Dividing script...")
+        divider = ScriptDividerAgent(llm)
+        divider.load_skill("script_divider")
+        division = divider.extract({"script_text": script_text})
+
+        # 4. 项目级提取（最终输出）
+        logger.info("Step 4: Project-level extraction...")
+        extractor = ElementExtractorAgent(llm)
+        extractor.load_skill("script_extractor")
+        final_result = extractor.extract(
+            {
+                "project_id": request.project_id,
+                "chapter_id": request.chapter_id,
+                "script_text": script_text,
+                "script_division_json": json.dumps(division.model_dump(), ensure_ascii=False),
+                "consistency_json": json.dumps(consistency.model_dump(), ensure_ascii=False),
+            }
+        )
         logger.info("Full process completed successfully")
-        return success_response(data=final_output)
+        return success_response(data=final_result)
     
     except Exception as e:
         logger.error(f"Full process failed: {e}")

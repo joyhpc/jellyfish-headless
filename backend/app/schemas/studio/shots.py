@@ -133,48 +133,46 @@ class ShotDialogLineRead(ShotDialogLineBase):
         from_attributes = True
 
 
-class ShotLinkBase(BaseModel):
+class ProjectLinkBase(BaseModel):
     id: int = Field(..., description="关联行 ID")
-    shot_id: str = Field(..., description="镜头 ID")
-    index: int = Field(0, description="镜头内排序")
-    note: str = Field("", description="备注")
+    project_id: str = Field(..., description="项目 ID")
+    chapter_id: str | None = Field(None, description="章节 ID（可空）")
+    shot_id: str | None = Field(None, description="镜头 ID（可空）")
 
 
-class ShotAssetLinkCreate(BaseModel):
-    shot_id: str
+class ProjectAssetLinkCreate(BaseModel):
+    project_id: str
+    chapter_id: str | None = None
+    shot_id: str | None = None
     asset_id: str
-    index: int = 0
-    note: str = ""
 
 
-class ShotLinkUpdate(BaseModel):
-    index: int | None = None
-    note: str | None = None
-
-
-class ShotActorImageLinkRead(ShotLinkBase):
-    actor_image_id: str
+class ProjectActorLinkRead(ProjectLinkBase):
+    actor_id: str
 
     class Config:
         from_attributes = True
 
 
-class ShotSceneLinkRead(ShotLinkBase):
+class ProjectSceneLinkRead(ProjectLinkBase):
     scene_id: str
+    thumbnail: str = Field("", description="场景缩略图下载地址")
 
     class Config:
         from_attributes = True
 
 
-class ShotPropLinkRead(ShotLinkBase):
+class ProjectPropLinkRead(ProjectLinkBase):
     prop_id: str
+    thumbnail: str = Field("", description="道具缩略图下载地址")
 
     class Config:
         from_attributes = True
 
 
-class ShotCostumeLinkRead(ShotLinkBase):
+class ProjectCostumeLinkRead(ProjectLinkBase):
     costume_id: str
+    thumbnail: str = Field("", description="服装缩略图下载地址")
 
     class Config:
         from_attributes = True

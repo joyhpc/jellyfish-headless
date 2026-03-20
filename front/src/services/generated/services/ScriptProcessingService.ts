@@ -1,0 +1,193 @@
+/* generated using openapi-typescript-codegen -- do not edit */
+/* istanbul ignore file */
+/* tslint:disable */
+/* eslint-disable */
+import type { ApiResponse_EntityMergeResult_ } from '../models/ApiResponse_EntityMergeResult_';
+import type { ApiResponse_ScriptConsistencyCheckResult_ } from '../models/ApiResponse_ScriptConsistencyCheckResult_';
+import type { ApiResponse_ScriptDivisionResult_ } from '../models/ApiResponse_ScriptDivisionResult_';
+import type { ApiResponse_ScriptOptimizationResult_ } from '../models/ApiResponse_ScriptOptimizationResult_';
+import type { ApiResponse_ShotElementExtractionResult_ } from '../models/ApiResponse_ShotElementExtractionResult_';
+import type { ApiResponse_StudioScriptExtractionDraft_ } from '../models/ApiResponse_StudioScriptExtractionDraft_';
+import type { ApiResponse_VariantAnalysisResult_ } from '../models/ApiResponse_VariantAnalysisResult_';
+import type { EntityMergerRequest } from '../models/EntityMergerRequest';
+import type { FullProcessRequest } from '../models/FullProcessRequest';
+import type { ScriptConsistencyCheckRequest } from '../models/ScriptConsistencyCheckRequest';
+import type { ScriptDividerRequest } from '../models/ScriptDividerRequest';
+import type { ScriptExtractRequest } from '../models/ScriptExtractRequest';
+import type { ScriptOptimizeRequest } from '../models/ScriptOptimizeRequest';
+import type { ShotElementExtractionRequest } from '../models/ShotElementExtractionRequest';
+import type { VariantAnalysisRequest } from '../models/VariantAnalysisRequest';
+import type { CancelablePromise } from '../core/CancelablePromise';
+import { OpenAPI } from '../core/OpenAPI';
+import { request as __request } from '../core/request';
+export class ScriptProcessingService {
+    /**
+     * 将剧本分割为多个镜头
+     * 输入完整剧本文本，输出分镜列表（index/start_line/end_line/script_excerpt/scene_name/time_of_day/character_names_in_text）。注意：此阶段不强制稳定ID，角色以“称呼/名字”弱信息输出，稳定ID在合并阶段统一分配。
+     * @returns ApiResponse_ScriptDivisionResult_ Successful Response
+     * @throws ApiError
+     */
+    public static divideScriptApiV1ScriptProcessingDividePost({
+        requestBody,
+    }: {
+        requestBody: ScriptDividerRequest,
+    }): CancelablePromise<ApiResponse_ScriptDivisionResult_> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/script-processing/divide',
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * @deprecated
+     * 从单个镜头提取信息
+     * [已弃用] 旧版逐镜提取接口。新流程请使用 /extract（项目级提取，直接输出最终结果）。
+     * @returns ApiResponse_ShotElementExtractionResult_ Successful Response
+     * @throws ApiError
+     */
+    public static extractShotElementsApiV1ScriptProcessingExtractElementsPost({
+        requestBody,
+    }: {
+        requestBody: ShotElementExtractionRequest,
+    }): CancelablePromise<ApiResponse_ShotElementExtractionResult_> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/script-processing/extract-elements',
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * 合并多镜头的实体信息
+     * 输入全部分镜提取结果（可选带上脚本分镜与历史实体库），输出合并后的实体库：角色库/地点库/场景库/道具库（静态画像 + 变体列表）。该步骤会统一分配稳定ID（如 char_001/loc_001/prop_001/scene_001）。当提供 previous_merge 与 conflict_resolutions 时，将进行冲突重试合并，优先消解 conflicts 并尽量保持 ID 稳定。
+     * @returns ApiResponse_EntityMergeResult_ Successful Response
+     * @throws ApiError
+     */
+    public static mergeEntitiesApiV1ScriptProcessingMergeEntitiesPost({
+        requestBody,
+    }: {
+        requestBody: EntityMergerRequest,
+    }): CancelablePromise<ApiResponse_EntityMergeResult_> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/script-processing/merge-entities',
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * 分析服装/外形变体
+     * 检测角色服装/外形变化，构建演变时间线，生成章节变体建议列表与变体建议。
+     * @returns ApiResponse_VariantAnalysisResult_ Successful Response
+     * @throws ApiError
+     */
+    public static analyzeVariantsApiV1ScriptProcessingAnalyzeVariantsPost({
+        requestBody,
+    }: {
+        requestBody: VariantAnalysisRequest,
+    }): CancelablePromise<ApiResponse_VariantAnalysisResult_> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/script-processing/analyze-variants',
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * 检查角色混淆一致性（基于原文）
+     * 检测同一角色在不同段落/镜头被赋予不同身份/行为主体导致混淆，并给出修改建议。
+     * @returns ApiResponse_ScriptConsistencyCheckResult_ Successful Response
+     * @throws ApiError
+     */
+    public static checkConsistencyApiV1ScriptProcessingCheckConsistencyPost({
+        requestBody,
+    }: {
+        requestBody: ScriptConsistencyCheckRequest,
+    }): CancelablePromise<ApiResponse_ScriptConsistencyCheckResult_> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/script-processing/check-consistency',
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * 基于一致性检查优化剧本
+     * 将一致性检查输出及原文作为输入，生成优化后的剧本（尽量少改，只改与角色混淆 issues 相关段落）。
+     * @returns ApiResponse_ScriptOptimizationResult_ Successful Response
+     * @throws ApiError
+     */
+    public static optimizeScriptApiV1ScriptProcessingOptimizeScriptPost({
+        requestBody,
+    }: {
+        requestBody: ScriptOptimizeRequest,
+    }): CancelablePromise<ApiResponse_ScriptOptimizationResult_> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/script-processing/optimize-script',
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * 项目级信息提取（最终输出）
+     * 输入剧本文本+分镜结果（可选带一致性检查结果），输出可导入 Studio 的草稿结构（name-based，ID 由导入接口生成）。
+     * @returns ApiResponse_StudioScriptExtractionDraft_ Successful Response
+     * @throws ApiError
+     */
+    public static extractScriptApiV1ScriptProcessingExtractPost({
+        requestBody,
+    }: {
+        requestBody: ScriptExtractRequest,
+    }): CancelablePromise<ApiResponse_StudioScriptExtractionDraft_> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/script-processing/extract',
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * 完整工作流处理
+     * 新流程：一致性检查→（可选优化）→分镜→项目级信息提取（最终输出）
+     * @returns ApiResponse_StudioScriptExtractionDraft_ Successful Response
+     * @throws ApiError
+     */
+    public static fullProcessApiV1ScriptProcessingFullProcessPost({
+        requestBody,
+    }: {
+        requestBody: FullProcessRequest,
+    }): CancelablePromise<ApiResponse_StudioScriptExtractionDraft_> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/script-processing/full-process',
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+}

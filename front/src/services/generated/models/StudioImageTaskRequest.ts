@@ -6,7 +6,7 @@
  * Studio 专用图片任务请求体：可选模型 ID，不传则用默认图片模型；供应商由模型反查。
  *
  * image_id 表示具体的图片模型 ID，例如：
- * - 演员形象图片：ActorImageImage.id
+ * - 演员图片：ActorImage.id
  * - 场景图片：SceneImage.id
  * - 道具图片：PropImage.id
  * - 服装图片：CostumeImage.id
@@ -19,7 +19,7 @@ export type StudioImageTaskRequest = {
      */
     model_id?: (string | null);
     /**
-     * 图片模型 ID，如 ActorImageImage.id / SceneImage.id / PropImage.id 等；必须与路径主体 ID 匹配
+     * 图片模型 ID，如 ActorImage.id / SceneImage.id / PropImage.id 等；必须与路径主体 ID 匹配
      */
     image_id?: (number | null);
 };

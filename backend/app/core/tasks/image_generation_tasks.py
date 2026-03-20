@@ -8,12 +8,19 @@
 
 from __future__ import annotations
 
+import json
+import logging
+import time
 from typing import Any, AsyncIterator, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.core.task_manager.types import BaseTask
 from app.core.tasks.video_generation_tasks import ProviderConfig, ProviderKey
+
+# 说明：多数部署/本地默认只展示 uvicorn.error 的 WARNING+。
+# 为了确保“HTTP 请求详情”在当前环境可见，这里使用 uvicorn.error 并用 warning 级别输出。
+logger = logging.getLogger("uvicorn.error")
 
 
 ResponseFormat = Literal["url", "b64_json"]
@@ -181,6 +188,43 @@ class ImageGenerationTask(BaseTask):
             "Content-Type": "application/json",
         }
 
+        def _redact_headers(h: dict[str, str]) -> dict[str, str]:
+            redacted: dict[str, str] = {}
+            for k, v in (h or {}).items():
+                lk = k.lower()
+                if lk in {"authorization", "x-api-key", "api-key"}:
+                    redacted[k] = "***redacted***"
+                else:
+                    redacted[k] = v
+            return redacted
+
+        def _safe_body_for_log(body: dict[str, Any]) -> dict[str, Any]:
+            # 避免日志过大与泄露：prompt 截断、images 只保留数量与前几个摘要
+            out: dict[str, Any] = dict(body or {})
+            if "prompt" in out and isinstance(out["prompt"], str):
+                p = out["prompt"].strip()
+                out["prompt"] = (p[:300] + "...(truncated)") if len(p) > 300 else p
+            imgs = out.get("images")
+            if isinstance(imgs, list):
+                brief: list[dict[str, Any]] = []
+                for it in imgs[:5]:
+                    if not isinstance(it, dict):
+                        continue
+                    image_url = it.get("image_url")
+                    file_id = it.get("file_id")
+                    brief.append(
+                        {
+                            "has_image_url": bool(image_url),
+                            "image_url_prefix": (str(image_url)[:80] + "...") if isinstance(image_url, str) and len(image_url) > 80 else image_url,
+                            "has_file_id": bool(file_id),
+                        }
+                    )
+                out["images"] = {
+                    "count": len(imgs),
+                    "sample": brief,
+                }
+            return out
+
         async with httpx.AsyncClient(timeout=self._timeout_s) as client:
             if self._input.images:
                 # 使用 Create image edit 接口：/images/edits
@@ -209,7 +253,16 @@ class ImageGenerationTask(BaseTask):
                     for ref in self._input.images
                 ]
 
-                r = await client.post(f"{base_url}/images/edits", headers=headers, json=body)
+                url = f"{base_url}/images/edits"
+                t0 = time.perf_counter()
+                logger.warning(
+                    "image_generation_http_request provider=%s method=POST url=%s headers=%s body=%s",
+                    "openai",
+                    url,
+                    _redact_headers(headers),
+                    json.dumps(_safe_body_for_log(body), ensure_ascii=False),
+                )
+                r = await client.post(url, headers=headers, json=body)
             else:
                 # 无参考图：使用标准的 /images/generations
                 body = {
@@ -222,7 +275,32 @@ class ImageGenerationTask(BaseTask):
                 if self._input.size:
                     body["size"] = self._input.size
 
-                r = await client.post(f"{base_url}/images/generations", headers=headers, json=body)
+                url = f"{base_url}/images/generations"
+                t0 = time.perf_counter()
+                logger.warning(
+                    "image_generation_http_request provider=%s method=POST url=%s headers=%s body=%s",
+                    "openai",
+                    url,
+                    _redact_headers(headers),
+                    json.dumps(_safe_body_for_log(body), ensure_ascii=False),
+                )
+                r = await client.post(url, headers=headers, json=body)
+
+            dt_ms = int((time.perf_counter() - t0) * 1000)
+            # 先读文本用于日志；不消费 stream（httpx 默认已缓冲）
+            resp_text = ""
+            try:
+                resp_text = r.text or ""
+            except Exception:  # noqa: BLE001
+                resp_text = ""
+            logger.warning(
+                "image_generation_http_response provider=%s status=%s elapsed_ms=%s headers=%s body=%s",
+                "openai",
+                r.status_code,
+                dt_ms,
+                dict(r.headers),
+                (resp_text[:2000] + "...(truncated)") if len(resp_text) > 2000 else resp_text,
+            )
 
             r.raise_for_status()
             data = r.json()
@@ -286,7 +364,39 @@ class ImageGenerationTask(BaseTask):
             body["response_format"] = self._input.response_format
 
         async with httpx.AsyncClient(timeout=self._timeout_s) as client:
-            r = await client.post(f"{base_url}/images/generations", headers=headers, json=body)
+            url = f"{base_url}/images/generations"
+            t0 = time.perf_counter()
+            logger.warning(
+                "image_generation_http_request provider=%s method=POST url=%s headers=%s body=%s",
+                "volcengine",
+                url,
+                {"Authorization": "***redacted***", "Content-Type": headers.get("Content-Type", "application/json")},
+                json.dumps(
+                    {
+                        **(
+                            {"prompt": (body.get("prompt", "")[:300] + "...(truncated)") if isinstance(body.get("prompt"), str) and len(body.get("prompt")) > 300 else body.get("prompt")}
+                        ),
+                        **{k: v for k, v in body.items() if k != "prompt" and k != "image"},
+                        "image": {"count": len(body.get("image") or [])} if isinstance(body.get("image"), list) else body.get("image"),
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+            r = await client.post(url, headers=headers, json=body)
+            dt_ms = int((time.perf_counter() - t0) * 1000)
+            resp_text = ""
+            try:
+                resp_text = r.text or ""
+            except Exception:  # noqa: BLE001
+                resp_text = ""
+            logger.warning(
+                "image_generation_http_response provider=%s status=%s elapsed_ms=%s headers=%s body=%s",
+                "volcengine",
+                r.status_code,
+                dt_ms,
+                dict(r.headers),
+                (resp_text[:2000] + "...(truncated)") if len(resp_text) > 2000 else resp_text,
+            )
             r.raise_for_status()
             data = r.json()
 

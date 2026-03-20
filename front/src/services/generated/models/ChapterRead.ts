@@ -37,5 +37,9 @@ export type ChapterRead = {
      */
     status?: ChapterStatus;
     id: string;
+    /**
+     * 分镜数（shots 条数聚合）
+     */
+    shot_count?: number;
 };
 

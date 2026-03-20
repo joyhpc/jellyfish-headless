@@ -7,11 +7,11 @@ from pydantic import BaseModel, Field
 
 class ActorBase(BaseModel):
     id: str = Field(..., description="演员 ID")
-    project_id: str | None = Field(None, description="归属项目 ID（可空=全局演员）")
-    name: str = Field(..., description="演员名称")
-    description: str = Field("", description="演员描述/备注")
-    thumbnail: str = Field("", description="演员头像/缩略图")
+    name: str = Field(..., description="名称")
+    description: str = Field("", description="描述")
     tags: list[str] = Field(default_factory=list, description="标签")
+    prompt_template_id: str | None = Field(None, description="提示词模板 ID（可空）")
+    view_count: int = Field(1, ge=1, description="计划为该演员生成的视角图片数量（不含分镜帧）")
 
 
 class ActorCreate(ActorBase):
@@ -19,14 +19,16 @@ class ActorCreate(ActorBase):
 
 
 class ActorUpdate(BaseModel):
-    project_id: str | None = None
     name: str | None = None
     description: str | None = None
-    thumbnail: str | None = None
     tags: list[str] | None = None
+    prompt_template_id: str | None = None
+    view_count: int | None = Field(None, ge=1)
 
 
 class ActorRead(ActorBase):
+    thumbnail: str = Field("", description="缩略图下载地址")
+
     class Config:
         from_attributes = True
 
@@ -36,7 +38,7 @@ class CharacterBase(BaseModel):
     project_id: str = Field(..., description="所属项目 ID")
     name: str = Field(..., description="角色名称")
     description: str = Field("", description="角色描述")
-    actor_id: str | None = Field(None, description="演员 ID（可空）")
+    actor_id: str = Field(..., description="演员 ID")
     costume_id: str | None = Field(None, description="服装 ID（可空）")
 
 

@@ -4,11 +4,13 @@
 /* eslint-disable */
 import type { ActorCreate } from '../models/ActorCreate';
 import type { ActorUpdate } from '../models/ActorUpdate';
+import type { ApiResponse_ActorImageRead_ } from '../models/ApiResponse_ActorImageRead_';
 import type { ApiResponse_ActorRead_ } from '../models/ApiResponse_ActorRead_';
 import type { ApiResponse_CharacterImageRead_ } from '../models/ApiResponse_CharacterImageRead_';
 import type { ApiResponse_CharacterPropLinkRead_ } from '../models/ApiResponse_CharacterPropLinkRead_';
 import type { ApiResponse_CharacterRead_ } from '../models/ApiResponse_CharacterRead_';
 import type { ApiResponse_NoneType_ } from '../models/ApiResponse_NoneType_';
+import type { ApiResponse_PaginatedData_ActorImageRead__ } from '../models/ApiResponse_PaginatedData_ActorImageRead__';
 import type { ApiResponse_PaginatedData_ActorRead__ } from '../models/ApiResponse_PaginatedData_ActorRead__';
 import type { ApiResponse_PaginatedData_CharacterImageRead__ } from '../models/ApiResponse_PaginatedData_CharacterImageRead__';
 import type { ApiResponse_PaginatedData_CharacterPropLinkRead__ } from '../models/ApiResponse_PaginatedData_CharacterPropLinkRead__';
@@ -33,17 +35,12 @@ export class StudioCastService {
      * @throws ApiError
      */
     public static listActorsApiV1StudioCastActorsGet({
-        projectId,
         q,
         order,
         isDesc = false,
         page = 1,
         pageSize = 10,
     }: {
-        /**
-         * 按项目过滤；不传则包含全局+项目
-         */
-        projectId?: (string | null),
         /**
          * 关键字，过滤 name/description
          */
@@ -57,7 +54,6 @@ export class StudioCastService {
             method: 'GET',
             url: '/api/v1/studio/cast/actors',
             query: {
-                'project_id': projectId,
                 'q': q,
                 'order': order,
                 'is_desc': isDesc,
@@ -150,6 +146,118 @@ export class StudioCastService {
             url: '/api/v1/studio/cast/actors/{actor_id}',
             path: {
                 'actor_id': actorId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * 演员图片列表（分页）
+     * @returns ApiResponse_PaginatedData_ActorImageRead__ Successful Response
+     * @throws ApiError
+     */
+    public static listActorImagesApiV1StudioCastActorsActorIdImagesGet({
+        actorId,
+        order,
+        isDesc = false,
+        page = 1,
+        pageSize = 10,
+    }: {
+        actorId: string,
+        order?: (string | null),
+        isDesc?: boolean,
+        page?: number,
+        pageSize?: number,
+    }): CancelablePromise<ApiResponse_PaginatedData_ActorImageRead__> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/api/v1/studio/cast/actors/{actor_id}/images',
+            path: {
+                'actor_id': actorId,
+            },
+            query: {
+                'order': order,
+                'is_desc': isDesc,
+                'page': page,
+                'page_size': pageSize,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * 创建演员图片
+     * @returns ApiResponse_ActorImageRead_ Successful Response
+     * @throws ApiError
+     */
+    public static createActorImageApiV1StudioCastActorsActorIdImagesPost({
+        actorId,
+        requestBody,
+    }: {
+        actorId: string,
+        requestBody: AssetImageCreate,
+    }): CancelablePromise<ApiResponse_ActorImageRead_> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/studio/cast/actors/{actor_id}/images',
+            path: {
+                'actor_id': actorId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * 更新演员图片
+     * @returns ApiResponse_ActorImageRead_ Successful Response
+     * @throws ApiError
+     */
+    public static updateActorImageApiV1StudioCastActorsActorIdImagesImageIdPatch({
+        actorId,
+        imageId,
+        requestBody,
+    }: {
+        actorId: string,
+        imageId: number,
+        requestBody: AssetImageUpdate,
+    }): CancelablePromise<ApiResponse_ActorImageRead_> {
+        return __request(OpenAPI, {
+            method: 'PATCH',
+            url: '/api/v1/studio/cast/actors/{actor_id}/images/{image_id}',
+            path: {
+                'actor_id': actorId,
+                'image_id': imageId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * 删除演员图片
+     * @returns ApiResponse_NoneType_ Successful Response
+     * @throws ApiError
+     */
+    public static deleteActorImageApiV1StudioCastActorsActorIdImagesImageIdDelete({
+        actorId,
+        imageId,
+    }: {
+        actorId: string,
+        imageId: number,
+    }): CancelablePromise<ApiResponse_NoneType_> {
+        return __request(OpenAPI, {
+            method: 'DELETE',
+            url: '/api/v1/studio/cast/actors/{actor_id}/images/{image_id}',
+            path: {
+                'actor_id': actorId,
+                'image_id': imageId,
             },
             errors: {
                 422: `Validation Error`,

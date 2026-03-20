@@ -7,6 +7,16 @@ from app.chains.agents.shot_frame_prompt_agents import (
     ShotLastFramePromptAgent,
     ShotKeyFramePromptAgent,
 )
+from app.chains.agents.script_processing_agents import (
+    ScriptDividerAgent,
+    ElementExtractorAgent,
+    ShotElementExtractorAgent,
+    EntityMergerAgent,
+    VariantAnalyzerAgent,
+    ConsistencyCheckerAgent,
+    ScriptOptimizerAgent,
+    OutputCompilerAgent,
+)
 
 __all__ = [
     "SkillAgentBase",
@@ -16,4 +26,12 @@ __all__ = [
     "ShotFirstFramePromptAgent",
     "ShotLastFramePromptAgent",
     "ShotKeyFramePromptAgent",
+    "ScriptDividerAgent",
+    "ElementExtractorAgent",
+    "ShotElementExtractorAgent",
+    "EntityMergerAgent",
+    "VariantAnalyzerAgent",
+    "ConsistencyCheckerAgent",
+    "ScriptOptimizerAgent",
+    "OutputCompilerAgent",
 ]

@@ -10,7 +10,10 @@ export function resolveAssetUrl(value?: string | null): string | undefined {
   }
 
   try {
-    const fallbackBase = typeof window !== 'undefined' ? window.location.origin : 'http://localhost'
+    const fallbackBase =
+      import.meta.env.VITE_BACKEND_URL ||
+      import.meta.env.VITE_API_BASE_URL ||
+      (typeof window !== 'undefined' ? window.location.origin : 'http://localhost')
     return new URL(trimmed, OpenAPI.BASE || fallbackBase).toString()
   } catch {
     return trimmed

@@ -24,9 +24,10 @@ from app.dependencies import get_db
 from app.utils.files import create_file_from_url_or_b64
 from app.models.llm import Model, ModelCategoryKey, ModelSettings, Provider
 from app.models.studio import (
+    Actor,
     ActorImage,
-    ActorImageImage,
     AssetViewAngle,
+    AssetQualityLevel,
     Character,
     CharacterImage,
     Costume,
@@ -54,7 +55,7 @@ class StudioImageTaskRequest(BaseModel):
     """Studio 专用图片任务请求体：可选模型 ID，不传则用默认图片模型；供应商由模型反查。
 
     image_id 表示具体的图片模型 ID，例如：
-    - 演员形象图片：ActorImageImage.id
+    - 演员图片：ActorImage.id
     - 场景图片：SceneImage.id
     - 道具图片：PropImage.id
     - 服装图片：CostumeImage.id
@@ -68,7 +69,7 @@ class StudioImageTaskRequest(BaseModel):
     )
     image_id: int | None = Field(
         None,
-        description="图片模型 ID，如 ActorImageImage.id / SceneImage.id / PropImage.id 等；必须与路径主体 ID 匹配",
+        description="图片模型 ID，如 ActorImage.id / SceneImage.id / PropImage.id 等；必须与路径主体 ID 匹配",
     )
 
 
@@ -275,13 +276,86 @@ async def _resolve_front_image_ref(
     return {"image_url": data_url}
 
 
+async def _resolve_ordered_image_refs(
+    db: AsyncSession,
+    *,
+    image_model: type,
+    parent_field_name: str,
+    parent_id: str,
+    view_angles: tuple[AssetViewAngle, ...],
+) -> list[dict[str, str]]:
+    """按指定 view_angles 顺序，解析参考图（data url）。
+
+    - 仅取 file_id 不为空的记录；
+    - 同一 view_angle 取最新的一张（created_at desc, id desc）；
+    - 解析失败的角度会被跳过（不中断整体任务创建）。
+    """
+    parent_field = getattr(image_model, parent_field_name)
+    stmt = (
+        select(image_model)
+        .where(
+            parent_field == parent_id,
+            image_model.file_id.is_not(None),
+        )
+        .order_by(image_model.created_at.desc(), image_model.id.desc())
+    )
+    result = await db.execute(stmt)
+    rows = result.scalars().all()
+    if not rows:
+        return []
+
+    # 先按 view_angle 选“最新一张”
+    best_by_angle: dict[str, object] = {}
+    for row in rows:
+        angle = getattr(row, "view_angle", None)
+        key = angle.value if hasattr(angle, "value") else str(angle)
+        if key and key not in best_by_angle:
+            best_by_angle[key] = row
+
+    out: list[dict[str, str]] = []
+    for angle in view_angles:
+        row = best_by_angle.get(angle.value)
+        if row is None:
+            continue
+        file_id = getattr(row, "file_id", None)
+        if not file_id:
+            continue
+        file_obj = await db.get(FileItem, str(file_id))
+        if file_obj is None or not file_obj.storage_key:
+            continue
+        try:
+            content = await storage.download_file(key=file_obj.storage_key)
+        except Exception:  # noqa: BLE001
+            continue
+        if not content:
+            continue
+
+        content_type: str | None = None
+        try:
+            info = await storage.get_file_info(key=file_obj.storage_key)
+            content_type = (info.content_type or "").strip().lower() or None
+        except Exception:  # noqa: BLE001
+            content_type = None
+        if not content_type:
+            guessed_type, _ = mimetypes.guess_type(file_obj.storage_key)
+            content_type = (guessed_type or "").strip().lower() or None
+        if not content_type or not content_type.startswith("image/"):
+            content_type = "image/png"
+
+        image_format = content_type.split("/", 1)[1].split(";", 1)[0].strip().lower() or "png"
+        encoded = base64.b64encode(content).decode("ascii")
+        data_url = f"data:image/{image_format};base64,{encoded}"
+        out.append({"image_url": data_url})
+    return out
+
+
 def _asset_prompt_category(
     *,
     relation_type: str,
     is_front_view: bool,
 ) -> PromptCategory:
     mapping = {
-        "actor_image_image": (PromptCategory.actor_image_front, PromptCategory.actor_image_other),
+        "actor_image": (PromptCategory.actor_image_front, PromptCategory.actor_image_other),
         "prop_image": (PromptCategory.prop_front, PromptCategory.prop_other),
         "scene_image": (PromptCategory.scene_front, PromptCategory.scene_other),
         "costume_image": (PromptCategory.costume_front, PromptCategory.costume_other),
@@ -354,13 +428,13 @@ async def _create_image_task_and_link(
         """根据 relation_type 将生成的图片落库为 FileItem + 具体资产图片表。
 
         - 先将图片内容上传到 S3，创建 FileItem 记录；
-        - 再根据 relation_type 写入 ActorImageImage / SceneImage 等业务图片表；
+        - 再根据 relation_type 写入 ActorImage / SceneImage 等业务图片表；
         - 当前实现先支持 actor_image / scene_image / prop_image / costume_image，其他类型可按需扩展。
         """
         from sqlalchemy import select
 
         from app.models.studio import (
-            ActorImageImage,
+            ActorImage,
             CharacterImage,
             CostumeImage,
             PropImage,
@@ -403,8 +477,8 @@ async def _create_image_task_and_link(
             link_row.file_id = file_id
 
         # 根据 relation_type 将生成文件填充到已有 image 槽位的 file_id（仅首张生效）
-        if relation_type == "actor_image_image":
-            image_row = await session.get(ActorImageImage, int(relation_entity_id))
+        if relation_type == "actor_image":
+            image_row = await session.get(ActorImage, int(relation_entity_id))
             if image_row is not None and not image_row.file_id:
                 image_row.file_id = file_id
         elif relation_type == "scene_image":
@@ -423,6 +497,47 @@ async def _create_image_task_and_link(
             image_row = await session.get(CharacterImage, int(relation_entity_id))
             if image_row is not None and not image_row.file_id:
                 image_row.file_id = file_id
+        elif relation_type == "character":
+            # 角色生成（任务版）：落库为 CharacterImage（优先填充 front+low 槽位；没有则创建）
+            character_id = relation_entity_id
+            stmt_ci = (
+                select(CharacterImage)
+                .where(
+                    CharacterImage.character_id == character_id,
+                    CharacterImage.quality_level == AssetQualityLevel.low,
+                    CharacterImage.view_angle == AssetViewAngle.front,
+                )
+                .order_by(CharacterImage.id.asc())
+                .limit(1)
+            )
+            ci_res = await session.execute(stmt_ci)
+            ci = ci_res.scalars().first()
+            if ci is not None:
+                if not ci.file_id:
+                    ci.file_id = file_id
+                    ci.format = getattr(ci, "format", "") or "png"
+            else:
+                # 创建一个 front+low 的槽位，并设为主图（同一角色只允许一张主图，下面会清理其他主图）
+                ci = CharacterImage(
+                    character_id=character_id,
+                    file_id=file_id,
+                    quality_level=AssetQualityLevel.low,
+                    view_angle=AssetViewAngle.front,
+                    width=None,
+                    height=None,
+                    format="png",
+                    is_primary=True,
+                )
+                session.add(ci)
+
+            # 如果本次落库的行是主图，确保同一角色只有一个主图
+            if ci is not None and getattr(ci, "is_primary", False) is True and getattr(ci, "id", None) is not None:
+                stmt_clear = (
+                    CharacterImage.__table__.update()
+                    .where(CharacterImage.character_id == character_id, CharacterImage.id != ci.id)
+                    .values(is_primary=False)
+                )
+                await session.execute(stmt_clear)
         elif relation_type == "shot_frame_image":
             image_row = await session.get(ShotFrameImage, int(relation_entity_id))
             if image_row is not None and not image_row.file_id:
@@ -480,59 +595,55 @@ async def _create_image_task_and_link(
 
 
 @router.post(
-    "/actor-images/{actor_image_id}/image-tasks",
+    "/actors/{actor_id}/image-tasks",
     response_model=ApiResponse[TaskCreated],
     status_code=status.HTTP_201_CREATED,
-    summary="演员形象/立绘图片生成（任务版）",
+    summary="演员图片生成（任务版）",
 )
 async def create_actor_image_generation_task(
-    actor_image_id: str,
+    actor_id: str,
     body: StudioImageTaskRequest,
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[TaskCreated]:
-    """为指定演员形象创建图片生成任务，并通过 `GenerationTaskLink` 关联。
-
-    - path 参数 actor_image_id 表示 ActorImage.id
-    - body.image_id 必须为该 ActorImage 下的 ActorImageImage.id
-    """
-    actor_image = await db.get(ActorImage, actor_image_id)
-    if actor_image is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ActorImage not found")
+    """为指定演员创建图片生成任务，并通过 `GenerationTaskLink` 关联。"""
+    actor = await db.get(Actor, actor_id)
+    if actor is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Actor not found")
     if body.image_id is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="image_id is required for actor image generation",
+            detail="image_id is required for actor generation",
         )
-    image_row = await db.get(ActorImageImage, body.image_id)
-    if image_row is None or image_row.actor_image_id != actor_image_id:
+    image_row = await db.get(ActorImage, body.image_id)
+    if image_row is None or image_row.actor_id != actor_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="image_id does not belong to given actor_image_id",
+            detail="image_id does not belong to given actor_id",
         )
     is_front_view = _is_front_view(image_row.view_angle)
     category = _asset_prompt_category(
-        relation_type="actor_image_image",
+        relation_type="actor_image",
         is_front_view=is_front_view,
     )
     prompt = await _build_prompt_with_template(
         db,
         category=category,
         variables={
-            "name": actor_image.name,
-            "description": actor_image.description,
-            "tags": ", ".join(actor_image.tags or []),
+            "name": actor.name,
+            "description": actor.description,
+            "tags": ", ".join(actor.tags or []),
             "view_angle": _map_view_angle_for_prompt(image_row.view_angle),
             "quality_level": image_row.quality_level,
             "format": image_row.format,
         },
-        fallback_prompt=actor_image.description,
-        not_found_msg="ActorImage.description is empty",
+        fallback_prompt=actor.description,
+        not_found_msg="Actor.description is empty",
     )
 
     created = await _create_image_task_and_link(
         db=db,
         model_id=body.model_id,
-        relation_type="actor_image_image",
+        relation_type="actor_image",
         relation_entity_id=str(image_row.id),
         prompt=prompt,
         images=(
@@ -541,9 +652,9 @@ async def create_actor_image_generation_task(
             else [ref]
             if (ref := await _resolve_front_image_ref(
                 db,
-                image_model=ActorImageImage,
-                parent_field_name="actor_image_id",
-                parent_id=actor_image_id,
+                image_model=ActorImage,
+                parent_field_name="actor_id",
+                parent_id=actor_id,
                 preferred_quality_level=image_row.quality_level,
             ))
             else []
@@ -766,12 +877,42 @@ async def create_character_image_generation_task(
         fallback_prompt=character.description,
         not_found_msg="Character.description is empty",
     )
+    # 自动带上参考图：Actor 图片（若存在）+ Costume 图片（若角色关联了）
+    actor: Actor | None = await db.get(Actor, character.actor_id) if character.actor_id else None
+    costume: Costume | None = await db.get(Costume, character.costume_id) if character.costume_id else None
+
+    DEFAULT_VIEW_ANGLES: tuple[AssetViewAngle, ...] = (
+        AssetViewAngle.front,
+        AssetViewAngle.left,
+        AssetViewAngle.right,
+        AssetViewAngle.back,
+    )
+    actor_refs: list[dict[str, str]] = []
+    if actor is not None:
+        actor_refs = await _resolve_ordered_image_refs(
+            db,
+            image_model=ActorImage,
+            parent_field_name="actor_id",
+            parent_id=actor.id,
+            view_angles=DEFAULT_VIEW_ANGLES,
+        )
+    costume_refs: list[dict[str, str]] = []
+    if costume is not None:
+        costume_refs = await _resolve_ordered_image_refs(
+            db,
+            image_model=CostumeImage,
+            parent_field_name="costume_id",
+            parent_id=costume.id,
+            view_angles=DEFAULT_VIEW_ANGLES,
+        )
+    ref_images = [*actor_refs, *costume_refs]
     created = await _create_image_task_and_link(
         db=db,
         model_id=body.model_id,
         relation_type="character_image",
         relation_entity_id=str(image_row.id),
         prompt=prompt,
+        images=ref_images if ref_images else None,
     )
     return success_response(created, code=201)
 

@@ -1,14 +1,293 @@
-import { useNavigate } from 'react-router-dom'
-import { PlaceholderTab } from './PlaceholderTab'
+import { useEffect, useMemo, useState } from 'react'
+import { Button, Card, Empty, Input, Modal, Space, message } from 'antd'
+import { LinkOutlined, PlusOutlined } from '@ant-design/icons'
+import { useNavigate, useParams } from 'react-router-dom'
+import { StudioAssetsService, StudioShotLinksService } from '../../../../../services/generated'
+import type { ProjectCostumeLinkRead, ProjectPropLinkRead, CostumeRead, PropRead } from '../../../../../services/generated'
+import { resolveAssetUrl } from '../../../assets/utils'
+import { DisplayImageCard } from '../../../assets/components/DisplayImageCard'
+
+type AssetKind = 'prop' | 'costume'
+
+function LinkedAssetTab({
+  kind,
+  projectId,
+}: {
+  kind: AssetKind
+  projectId: string
+}) {
+  const navigate = useNavigate()
+  const [linkModalOpen, setLinkModalOpen] = useState(false)
+  const [search, setSearch] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [listLoading, setListLoading] = useState(false)
+  const [linkingId, setLinkingId] = useState<string | null>(null)
+  const [unlinkingId, setUnlinkingId] = useState<number | null>(null)
+
+  const [links, setLinks] = useState<(ProjectPropLinkRead | ProjectCostumeLinkRead)[]>([])
+  const [assets, setAssets] = useState<(PropRead | CostumeRead)[]>([])
+  const [assetsById, setAssetsById] = useState<Record<string, PropRead | CostumeRead>>({})
+
+  const loadLinks = async () => {
+    setLoading(true)
+    try {
+      const res =
+        kind === 'prop'
+          ? await StudioShotLinksService.listProjectPropLinksApiV1StudioShotLinksPropGet({
+              projectId,
+              chapterId: null,
+              shotId: null,
+              propId: null,
+              order: null,
+              isDesc: false,
+              page: 1,
+              pageSize: 100,
+            })
+          : await StudioShotLinksService.listProjectCostumeLinksApiV1StudioShotLinksCostumeGet({
+              projectId,
+              chapterId: null,
+              shotId: null,
+              costumeId: null,
+              order: null,
+              isDesc: false,
+              page: 1,
+              pageSize: 100,
+            })
+      const items = res.data?.items ?? []
+      setLinks(items)
+
+      const ids = Array.from(
+        new Set(
+          items.map((l) => ('prop_id' in l ? l.prop_id : l.costume_id)),
+        ),
+      )
+      const detailList = await Promise.all(
+        ids.map((id) =>
+          kind === 'prop'
+            ? StudioAssetsService.getPropApiV1StudioAssetsPropsPropIdGet({ propId: id }).then((r) => r.data ?? null).catch(() => null)
+            : StudioAssetsService.getCostumeApiV1StudioAssetsCostumesCostumeIdGet({ costumeId: id }).then((r) => r.data ?? null).catch(() => null),
+        ),
+      )
+      const map: Record<string, PropRead | CostumeRead> = {}
+      detailList.filter(Boolean).forEach((x) => {
+        map[(x as PropRead | CostumeRead).id] = x as PropRead | CostumeRead
+      })
+      setAssetsById(map)
+    } catch {
+      message.error(`加载项目${kind === 'prop' ? '道具' : '服装'}关联失败`)
+      setLinks([])
+      setAssetsById({})
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const loadAssets = async (qOverride?: string) => {
+    setListLoading(true)
+    try {
+      const q = (qOverride ?? search).trim()
+      const res =
+        kind === 'prop'
+          ? await StudioAssetsService.listPropsApiV1StudioAssetsPropsGet({
+              q: q || null,
+              order: 'updated_at',
+              isDesc: true,
+              page: 1,
+              pageSize: 100,
+            })
+          : await StudioAssetsService.listCostumesApiV1StudioAssetsCostumesGet({
+              q: q || null,
+              order: 'updated_at',
+              isDesc: true,
+              page: 1,
+              pageSize: 100,
+            })
+      setAssets(res.data?.items ?? [])
+    } catch {
+      message.error(`加载${kind === 'prop' ? '道具' : '服装'}失败`)
+      setAssets([])
+    } finally {
+      setListLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    void loadLinks()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, kind])
+
+  useEffect(() => {
+    if (linkModalOpen) void loadAssets('')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [linkModalOpen, kind])
+
+  const linkedIdSet = useMemo(
+    () => new Set(links.map((l) => ('prop_id' in l ? l.prop_id : l.costume_id))),
+    [links],
+  )
+  const available = useMemo(() => assets.filter((a) => !linkedIdSet.has(a.id)), [assets, linkedIdSet])
+
+  const handleLink = async (assetId: string, assetName: string) => {
+    setLinkingId(assetId)
+    try {
+      if (kind === 'prop') {
+        await StudioShotLinksService.createProjectPropLinkApiV1StudioShotLinksPropPost({
+          requestBody: { project_id: projectId, chapter_id: null, shot_id: null, asset_id: assetId },
+        })
+      } else {
+        await StudioShotLinksService.createProjectCostumeLinkApiV1StudioShotLinksCostumePost({
+          requestBody: { project_id: projectId, chapter_id: null, shot_id: null, asset_id: assetId },
+        })
+      }
+      message.success(`已关联${kind === 'prop' ? '道具' : '服装'}「${assetName}」`)
+      setLinkModalOpen(false)
+      await loadLinks()
+    } catch {
+      message.error('关联失败')
+    } finally {
+      setLinkingId(null)
+    }
+  }
+
+  const handleUnlink = async (link: ProjectPropLinkRead | ProjectCostumeLinkRead) => {
+    setUnlinkingId(link.id)
+    try {
+      if ('prop_id' in link) {
+        await StudioShotLinksService.deleteProjectPropLinkApiV1StudioShotLinksPropLinkIdDelete({ linkId: link.id })
+      } else {
+        await StudioShotLinksService.deleteProjectCostumeLinkApiV1StudioShotLinksCostumeLinkIdDelete({ linkId: link.id })
+      }
+      message.success('已取消关联')
+      await loadLinks()
+    } catch {
+      message.error('取消关联失败')
+    } finally {
+      setUnlinkingId(null)
+    }
+  }
+
+  return (
+    <>
+      <Card
+        title={`项目${kind === 'prop' ? '道具' : '服装'}`}
+        extra={
+          <Space>
+            <Button
+              type="primary"
+              icon={<LinkOutlined />}
+              onClick={() => {
+                setSearch('')
+                setLinkModalOpen(true)
+              }}
+            >
+              从资产库关联
+            </Button>
+            <Button icon={<PlusOutlined />} onClick={() => navigate(`/assets?tab=${kind}`)}>
+              前往资产管理
+            </Button>
+          </Space>
+        }
+      >
+        {links.length === 0 && !loading ? (
+          <Empty description={`暂无项目${kind === 'prop' ? '道具' : '服装'}`} image={Empty.PRESENTED_IMAGE_SIMPLE} />
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {links.map((l) => {
+              const assetId = 'prop_id' in l ? l.prop_id : l.costume_id
+              const asset = assetsById[assetId]
+              const linkThumb = 'thumbnail' in l ? l.thumbnail : undefined
+              return (
+                <DisplayImageCard
+                  key={l.id}
+                  title={<div className="truncate">{asset?.name ?? assetId}</div>}
+                  imageUrl={resolveAssetUrl(linkThumb ?? asset?.thumbnail)}
+                  imageAlt={asset?.name ?? assetId}
+                  extra={
+                    <Button
+                      size="small"
+                      danger
+                      loading={unlinkingId === l.id}
+                      onClick={() => {
+                        Modal.confirm({
+                          title: `取消关联「${asset?.name ?? assetId}」？`,
+                          okText: '取消关联',
+                          cancelText: '取消',
+                          okButtonProps: { danger: true },
+                          onOk: () => handleUnlink(l),
+                        })
+                      }}
+                    >
+                      取消关联
+                    </Button>
+                  }
+                  meta={
+                    <div className="space-y-1">
+                      <div className="text-xs text-gray-600 line-clamp-2">{asset?.description ?? '—'}</div>
+                      <div className="text-xs text-gray-500 truncate">{`${kind}_id：${assetId}`}</div>
+                    </div>
+                  }
+                />
+              )
+            })}
+          </div>
+        )}
+      </Card>
+
+      <Modal
+        title={`从资产库关联${kind === 'prop' ? '道具' : '服装'}`}
+        open={linkModalOpen}
+        onCancel={() => setLinkModalOpen(false)}
+        footer={null}
+        width={560}
+      >
+        <div className="mb-3">
+          <Input.Search
+            placeholder={`搜索${kind === 'prop' ? '道具' : '服装'}名称`}
+            allowClear
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            onSearch={(v) => loadAssets(v)}
+          />
+        </div>
+        <div className="max-h-[60vh] overflow-y-auto">
+          {listLoading ? (
+            <div className="py-8 text-center text-gray-500">加载中...</div>
+          ) : available.length === 0 ? (
+            <Empty description="暂无可关联资产" />
+          ) : (
+            <div className="space-y-2">
+              {available.map((a) => (
+                <div key={a.id} className="flex items-center justify-between gap-3 rounded border border-gray-200 p-2 hover:bg-gray-50">
+                  <div className="flex items-center gap-2 min-w-0">
+                    {resolveAssetUrl(a.thumbnail) ? (
+                      <img src={resolveAssetUrl(a.thumbnail)} alt="" className="w-10 h-10 rounded object-cover shrink-0" />
+                    ) : (
+                      <div className="w-10 h-10 rounded bg-gray-100 flex items-center justify-center text-gray-400 shrink-0">—</div>
+                    )}
+                    <div className="min-w-0">
+                      <div className="font-medium truncate">{a.name}</div>
+                      {a.description ? <div className="text-xs text-gray-500 truncate">{a.description}</div> : null}
+                    </div>
+                  </div>
+                  <Button type="primary" size="small" loading={linkingId === a.id} onClick={() => handleLink(a.id, a.name)}>
+                    关联到项目
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </Modal>
+    </>
+  )
+}
 
 export function PropsTab() {
-  const navigate = useNavigate()
-  return (
-    <PlaceholderTab
-      title="道具 / 服装"
-      description="合并管理道具与服装，支持按类别过滤。"
-      actionLabel="前往资产管理"
-      onAction={() => navigate('/assets')}
-    />
-  )
+  const { projectId } = useParams<{ projectId: string }>()
+  return <LinkedAssetTab kind="prop" projectId={projectId ?? ''} />
+}
+
+export function CostumesTab() {
+  const { projectId } = useParams<{ projectId: string }>()
+  return <LinkedAssetTab kind="costume" projectId={projectId ?? ''} />
 }

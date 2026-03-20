@@ -5,7 +5,7 @@ import Settings from './pages/Settings'
 import NotFound from './pages/NotFound'
 import ProjectLobby from './pages/aiStudio/project/ProjectLobby'
 import ProjectWorkbench from './pages/aiStudio/project/ProjectWorkbench'
-import ChapterPrep from './pages/aiStudio/chapter/ChapterPrep'
+import RoleDetailPage from './pages/aiStudio/project/ProjectWorkbench/RoleDetailPage'
 import ChapterStudio from './pages/aiStudio/chapter/ChapterStudio'
 import AssetManager from './pages/aiStudio/assets/AssetManager'
 import ActorAssetEditPage from './pages/aiStudio/assets/ActorAssetEditPage.tsx'
@@ -18,6 +18,11 @@ import VideoEditor from './pages/aiStudio/editor/VideoEditor'
 import AgentManagement from './pages/aiStudio/agents/AgentManagement'
 import AgentEdit from './pages/aiStudio/agents/AgentEdit.tsx'
 import ModelManagement from './pages/aiStudio/models/ModelManagement'
+import ChapterPrepLayout from './pages/aiStudio/chapter/prep/ChapterPrepLayout'
+import ConsistencyStep from './pages/aiStudio/chapter/prep/steps/ConsistencyStep'
+import DivideStep from './pages/aiStudio/chapter/prep/steps/DivideStep'
+import ExtractProjectStep from './pages/aiStudio/chapter/prep/steps/ExtractProjectStep'
+import { ChapterShotsPage } from './pages/aiStudio/shots/ChapterShotsPage'
 import './App.css'
 
 const App: React.FC = () => {
@@ -28,8 +33,15 @@ const App: React.FC = () => {
           <Route index element={<Navigate to="/projects" replace />} />
           <Route path="projects" element={<ProjectLobby />} />
           <Route path="projects/:projectId" element={<ProjectWorkbench />} />
-          <Route path="projects/:projectId/chapters/:chapterId/prep" element={<ChapterPrep />} />
+          <Route path="projects/:projectId/roles/:characterId/edit" element={<RoleDetailPage />} />
+          <Route path="projects/:projectId/chapters/:chapterId/prep" element={<ChapterPrepLayout />}>
+            <Route index element={<Navigate to="consistency" replace />} />
+            <Route path="consistency" element={<ConsistencyStep />} />
+            <Route path="divide" element={<DivideStep />} />
+            <Route path="extract" element={<ExtractProjectStep />} />
+          </Route>
           <Route path="projects/:projectId/chapters/:chapterId/studio" element={<ChapterStudio />} />
+          <Route path="projects/:projectId/chapters/:chapterId/shots" element={<ChapterShotsPage />} />
           <Route path="projects/:projectId/editor" element={<VideoEditor />} />
           <Route path="assets" element={<AssetManager />} />
           <Route path="assets/actors/:actorImageId/edit" element={<ActorAssetEditPage />} />

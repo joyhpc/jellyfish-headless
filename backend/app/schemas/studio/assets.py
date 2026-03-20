@@ -1,4 +1,4 @@
-"""资产（ActorImage/Scene/Prop/Costume）及其图片表的 schemas。"""
+"""资产（Scene/Prop/Costume）及其图片表的 schemas。"""
 
 from __future__ import annotations
 
@@ -9,8 +9,6 @@ from app.models.studio import AssetQualityLevel, AssetViewAngle
 
 class AssetBase(BaseModel):
     id: str = Field(..., description="资产 ID")
-    project_id: str | None = Field(None, description="归属项目 ID（可空=全局资产）")
-    chapter_id: str | None = Field(None, description="归属章节 ID（可空）")
     name: str = Field(..., description="名称")
     description: str = Field("", description="描述")
     tags: list[str] = Field(default_factory=list, description="标签")
@@ -20,8 +18,6 @@ class AssetBase(BaseModel):
 
 class AssetCreate(BaseModel):
     id: str
-    project_id: str | None = None
-    chapter_id: str | None = None
     name: str
     description: str = ""
     tags: list[str] = Field(default_factory=list)
@@ -30,8 +26,6 @@ class AssetCreate(BaseModel):
 
 
 class AssetUpdate(BaseModel):
-    project_id: str | None = None
-    chapter_id: str | None = None
     name: str | None = None
     description: str | None = None
     tags: list[str] | None = None
@@ -74,10 +68,6 @@ class AssetImageUpdate(BaseModel):
     format: str | None = None
 
 
-class ActorImageRead(AssetRead):
-    pass
-
-
 class SceneRead(AssetRead):
     pass
 
@@ -88,13 +78,6 @@ class PropRead(AssetRead):
 
 class CostumeRead(AssetRead):
     pass
-
-
-class ActorImageImageRead(AssetImageBase):
-    actor_image_id: str
-
-    class Config:
-        from_attributes = True
 
 
 class SceneImageRead(AssetImageBase):

@@ -1,7 +1,7 @@
-import { StudioAssetsService, StudioImageTasksService } from '../../../services/generated'
+import { StudioAssetsService, StudioCastService, StudioImageTasksService } from '../../../services/generated'
 import type {
-  ActorImageImageRead,
   ActorImageRead,
+  ActorRead,
   CostumeImageRead,
   CostumeRead,
   PropImageRead,
@@ -32,50 +32,50 @@ function normalizeUpdateImagePayload(payload: UpdateImagePayload): UpdateImagePa
 
 export const assetAdapters = {
   actor: {
-    missingAssetIdText: '缺少 actor_image_id',
+    missingAssetIdText: '缺少 actor_id',
     assetDisplayName: '演员',
     backTo: '/assets?tab=actor',
-    relationType: 'actor_image_image',
+    relationType: 'actor_image',
     getAsset: async (id: string) => {
-      const res = await StudioAssetsService.getActorImageApiV1StudioAssetsActorImagesActorImageIdGet({ actorImageId: id })
-      return (res.data ?? null) as ActorImageRead | null
+      const res = await StudioCastService.getActorApiV1StudioCastActorsActorIdGet({ actorId: id })
+      return (res.data ?? null) as ActorRead | null
     },
     updateAsset: async (id: string, payload) => {
-      const res = await StudioAssetsService.updateActorImageApiV1StudioAssetsActorImagesActorImageIdPatch({
-        actorImageId: id,
+      const res = await StudioCastService.updateActorApiV1StudioCastActorsActorIdPatch({
+        actorId: id,
         requestBody: payload,
       })
-      return (res.data ?? null) as ActorImageRead | null
+      return (res.data ?? null) as ActorRead | null
     },
     listImages: async (id: string) => {
-      const res = await StudioAssetsService.listActorImageImagesApiV1StudioAssetsActorImagesActorImageIdImagesGet({
-        actorImageId: id,
+      const res = await StudioCastService.listActorImagesApiV1StudioCastActorsActorIdImagesGet({
+        actorId: id,
         page: 1,
         pageSize: 100,
       })
-      return (res.data?.items ?? []) as ActorImageImageRead[]
+      return (res.data?.items ?? []) as ActorImageRead[]
     },
     createImageSlot: async (id: string, angle) => {
-      await StudioAssetsService.createActorImageImageApiV1StudioAssetsActorImagesActorImageIdImagesPost({
-        actorImageId: id,
+      await StudioCastService.createActorImageApiV1StudioCastActorsActorIdImagesPost({
+        actorId: id,
         requestBody: { view_angle: angle },
       })
     },
     updateImage: async (id: string, imageId: number, payload) => {
-      await StudioAssetsService.updateActorImageImageApiV1StudioAssetsActorImagesActorImageIdImagesImageIdPatch({
-        actorImageId: id,
+      await StudioCastService.updateActorImageApiV1StudioCastActorsActorIdImagesImageIdPatch({
+        actorId: id,
         imageId,
         requestBody: normalizeUpdateImagePayload(payload),
       })
     },
     createGenerationTask: async (id: string, imageId: number) => {
-      const res = await StudioImageTasksService.createActorImageGenerationTaskApiV1StudioImageTasksActorImagesActorImageIdImageTasksPost({
-        actorImageId: id,
-        requestBody: { image_id: imageId },
+      const res = await StudioImageTasksService.createActorImageGenerationTaskApiV1StudioImageTasksActorsActorIdImageTasksPost({
+        actorId: id,
+        requestBody: { image_id: imageId, model_id: null },
       })
       return res.data?.task_id ?? null
     },
-  } satisfies AdapterConfig<ActorImageRead, ActorImageImageRead>,
+  } satisfies AdapterConfig<ActorRead, ActorImageRead>,
   scene: {
     missingAssetIdText: '缺少 scene_id',
     assetDisplayName: '场景',

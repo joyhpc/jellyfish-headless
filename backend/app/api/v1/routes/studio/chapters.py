@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.utils import apply_keyword_filter, apply_order, paginate
 from app.dependencies import get_db
-from app.models.studio import Chapter, Project
+from app.models.studio import Chapter, Project, Shot
 from app.schemas.common import ApiResponse, PaginatedData, paginated_response, success_response
 from app.schemas.studio.projects import ChapterCreate, ChapterRead, ChapterUpdate
 
@@ -44,8 +44,23 @@ async def list_chapters(
         default="index",
     )
     items, total = await paginate(db, stmt=stmt, page=page, page_size=page_size)
+
+    chapter_ids = [c.id for c in items]
+    shot_count_by_chapter: dict[str, int] = {}
+    if chapter_ids:
+        count_stmt = (
+            select(Shot.chapter_id, func.count(Shot.id))
+            .where(Shot.chapter_id.in_(chapter_ids))
+            .group_by(Shot.chapter_id)
+        )
+        res = await db.execute(count_stmt)
+        shot_count_by_chapter = {str(ch_id): int(cnt) for ch_id, cnt in res.all()}
+
     return paginated_response(
-        [ChapterRead.model_validate(x) for x in items],
+        [
+            ChapterRead.model_validate(x).model_copy(update={"shot_count": shot_count_by_chapter.get(x.id, 0)})
+            for x in items
+        ],
         page=page,
         page_size=page_size,
         total=total,
@@ -87,7 +102,10 @@ async def get_chapter(
     obj = await db.get(Chapter, chapter_id)
     if obj is None:
         raise HTTPException(status_code=404, detail="Chapter not found")
-    return success_response(ChapterRead.model_validate(obj))
+    count_stmt = select(func.count(Shot.id)).where(Shot.chapter_id == chapter_id)
+    res = await db.execute(count_stmt)
+    shot_count = int(res.scalar() or 0)
+    return success_response(ChapterRead.model_validate(obj).model_copy(update={"shot_count": shot_count}))
 
 
 @router.patch(

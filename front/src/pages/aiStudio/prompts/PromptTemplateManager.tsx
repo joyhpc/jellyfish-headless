@@ -14,22 +14,16 @@ const fallbackCategoryLabels: Record<string, string> = {
   bgm: '配乐',
   sfx: '音效',
   chapter_front: '章节正面',
-  chapter_back: '章节背面',
-  chapter_side: '章节侧面',
-  actor_image: '角色正面',
-  actor_image_back: '角色背面',
-  actor_image_side: '角色侧面',
+  chapter_other: '章节其他',
+  actor_image_front: '角色正面',
+  actor_image_other: '角色其他',
   prop_front: '道具正面',
-  prop_back: '道具背面',
-  prop_side: '道具侧面',
+  prop_other: '道具其他',
   scene_front: '场景正面',
-  scene_back: '场景背面',
-  scene_side: '场景侧面',
+  scene_other: '场景其他',
   costume_front: '服装正面',
-  costume_back: '服装背面',
-  costume_side: '服装侧面',
+  costume_other: '服装其他',
   combined: '综合提示词',
-  role: '角色',
 }
 
 const PAGE_SIZE = 10
@@ -43,20 +37,15 @@ const defaultPromptCategories: PromptCategory[] = [
   'bgm',
   'sfx',
   'chapter_front',
-  'chapter_back',
-  'chapter_side',
-  'actor_image',
-  'actor_image_back',
-  'actor_image_side',
+  'chapter_other',
+  'actor_image_front',
+  'actor_image_other',
   'prop_front',
-  'prop_back',
-  'prop_side',
+  'prop_other',
   'scene_front',
-  'scene_back',
-  'scene_side',
+  'scene_other',
   'costume_front',
-  'costume_back',
-  'costume_side',
+  'costume_other',
   'combined',
 ]
 
@@ -100,7 +89,7 @@ const groupTitles: Record<(typeof groupOrder)[number], string> = {
 function getGroupKey(category: string): (typeof groupOrder)[number] {
   if (['frame_head', 'frame_tail', 'frame_key'].includes(category)) return 'frame'
   if (['video', 'storyboard'].includes(category)) return 'video'
-  if (['bgm', 'sfx', 'role'].includes(category)) return 'audio'
+  if (['bgm', 'sfx'].includes(category)) return 'audio'
   if (category.startsWith('chapter_')) return 'chapter'
   if (category.startsWith('actor_image')) return 'actor'
   if (category.startsWith('scene_')) return 'scene'

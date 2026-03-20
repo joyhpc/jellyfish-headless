@@ -2,13 +2,9 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-import type { ApiResponse_ActorImageImageRead_ } from '../models/ApiResponse_ActorImageImageRead_';
-import type { ApiResponse_ActorImageRead_ } from '../models/ApiResponse_ActorImageRead_';
 import type { ApiResponse_CostumeImageRead_ } from '../models/ApiResponse_CostumeImageRead_';
 import type { ApiResponse_CostumeRead_ } from '../models/ApiResponse_CostumeRead_';
 import type { ApiResponse_NoneType_ } from '../models/ApiResponse_NoneType_';
-import type { ApiResponse_PaginatedData_ActorImageImageRead__ } from '../models/ApiResponse_PaginatedData_ActorImageImageRead__';
-import type { ApiResponse_PaginatedData_ActorImageRead__ } from '../models/ApiResponse_PaginatedData_ActorImageRead__';
 import type { ApiResponse_PaginatedData_CostumeImageRead__ } from '../models/ApiResponse_PaginatedData_CostumeImageRead__';
 import type { ApiResponse_PaginatedData_CostumeRead__ } from '../models/ApiResponse_PaginatedData_CostumeRead__';
 import type { ApiResponse_PaginatedData_PropImageRead__ } from '../models/ApiResponse_PaginatedData_PropImageRead__';
@@ -28,262 +24,17 @@ import { OpenAPI } from '../core/OpenAPI';
 import { request as __request } from '../core/request';
 export class StudioAssetsService {
     /**
-     * 演员形象列表（分页）
-     * @returns ApiResponse_PaginatedData_ActorImageRead__ Successful Response
-     * @throws ApiError
-     */
-    public static listActorImagesApiV1StudioAssetsActorImagesGet({
-        projectId,
-        chapterId,
-        q,
-        order,
-        isDesc = false,
-        page = 1,
-        pageSize = 10,
-    }: {
-        projectId?: (string | null),
-        chapterId?: (string | null),
-        /**
-         * 关键字，过滤 name/description
-         */
-        q?: (string | null),
-        order?: (string | null),
-        isDesc?: boolean,
-        page?: number,
-        pageSize?: number,
-    }): CancelablePromise<ApiResponse_PaginatedData_ActorImageRead__> {
-        return __request(OpenAPI, {
-            method: 'GET',
-            url: '/api/v1/studio/assets/actor-images',
-            query: {
-                'project_id': projectId,
-                'chapter_id': chapterId,
-                'q': q,
-                'order': order,
-                'is_desc': isDesc,
-                'page': page,
-                'page_size': pageSize,
-            },
-            errors: {
-                422: `Validation Error`,
-            },
-        });
-    }
-    /**
-     * 创建演员形象
-     * @returns ApiResponse_ActorImageRead_ Successful Response
-     * @throws ApiError
-     */
-    public static createActorImageApiV1StudioAssetsActorImagesPost({
-        requestBody,
-    }: {
-        requestBody: AssetCreate,
-    }): CancelablePromise<ApiResponse_ActorImageRead_> {
-        return __request(OpenAPI, {
-            method: 'POST',
-            url: '/api/v1/studio/assets/actor-images',
-            body: requestBody,
-            mediaType: 'application/json',
-            errors: {
-                422: `Validation Error`,
-            },
-        });
-    }
-    /**
-     * 获取演员形象
-     * @returns ApiResponse_ActorImageRead_ Successful Response
-     * @throws ApiError
-     */
-    public static getActorImageApiV1StudioAssetsActorImagesActorImageIdGet({
-        actorImageId,
-    }: {
-        actorImageId: string,
-    }): CancelablePromise<ApiResponse_ActorImageRead_> {
-        return __request(OpenAPI, {
-            method: 'GET',
-            url: '/api/v1/studio/assets/actor-images/{actor_image_id}',
-            path: {
-                'actor_image_id': actorImageId,
-            },
-            errors: {
-                422: `Validation Error`,
-            },
-        });
-    }
-    /**
-     * 更新演员形象
-     * @returns ApiResponse_ActorImageRead_ Successful Response
-     * @throws ApiError
-     */
-    public static updateActorImageApiV1StudioAssetsActorImagesActorImageIdPatch({
-        actorImageId,
-        requestBody,
-    }: {
-        actorImageId: string,
-        requestBody: AssetUpdate,
-    }): CancelablePromise<ApiResponse_ActorImageRead_> {
-        return __request(OpenAPI, {
-            method: 'PATCH',
-            url: '/api/v1/studio/assets/actor-images/{actor_image_id}',
-            path: {
-                'actor_image_id': actorImageId,
-            },
-            body: requestBody,
-            mediaType: 'application/json',
-            errors: {
-                422: `Validation Error`,
-            },
-        });
-    }
-    /**
-     * 删除演员形象
-     * @returns ApiResponse_NoneType_ Successful Response
-     * @throws ApiError
-     */
-    public static deleteActorImageApiV1StudioAssetsActorImagesActorImageIdDelete({
-        actorImageId,
-    }: {
-        actorImageId: string,
-    }): CancelablePromise<ApiResponse_NoneType_> {
-        return __request(OpenAPI, {
-            method: 'DELETE',
-            url: '/api/v1/studio/assets/actor-images/{actor_image_id}',
-            path: {
-                'actor_image_id': actorImageId,
-            },
-            errors: {
-                422: `Validation Error`,
-            },
-        });
-    }
-    /**
-     * 演员形象图片列表（分页）
-     * @returns ApiResponse_PaginatedData_ActorImageImageRead__ Successful Response
-     * @throws ApiError
-     */
-    public static listActorImageImagesApiV1StudioAssetsActorImagesActorImageIdImagesGet({
-        actorImageId,
-        order,
-        isDesc = false,
-        page = 1,
-        pageSize = 10,
-    }: {
-        actorImageId: string,
-        order?: (string | null),
-        isDesc?: boolean,
-        page?: number,
-        pageSize?: number,
-    }): CancelablePromise<ApiResponse_PaginatedData_ActorImageImageRead__> {
-        return __request(OpenAPI, {
-            method: 'GET',
-            url: '/api/v1/studio/assets/actor-images/{actor_image_id}/images',
-            path: {
-                'actor_image_id': actorImageId,
-            },
-            query: {
-                'order': order,
-                'is_desc': isDesc,
-                'page': page,
-                'page_size': pageSize,
-            },
-            errors: {
-                422: `Validation Error`,
-            },
-        });
-    }
-    /**
-     * 创建演员形象图片
-     * @returns ApiResponse_ActorImageImageRead_ Successful Response
-     * @throws ApiError
-     */
-    public static createActorImageImageApiV1StudioAssetsActorImagesActorImageIdImagesPost({
-        actorImageId,
-        requestBody,
-    }: {
-        actorImageId: string,
-        requestBody: AssetImageCreate,
-    }): CancelablePromise<ApiResponse_ActorImageImageRead_> {
-        return __request(OpenAPI, {
-            method: 'POST',
-            url: '/api/v1/studio/assets/actor-images/{actor_image_id}/images',
-            path: {
-                'actor_image_id': actorImageId,
-            },
-            body: requestBody,
-            mediaType: 'application/json',
-            errors: {
-                422: `Validation Error`,
-            },
-        });
-    }
-    /**
-     * 更新演员形象图片
-     * @returns ApiResponse_ActorImageImageRead_ Successful Response
-     * @throws ApiError
-     */
-    public static updateActorImageImageApiV1StudioAssetsActorImagesActorImageIdImagesImageIdPatch({
-        actorImageId,
-        imageId,
-        requestBody,
-    }: {
-        actorImageId: string,
-        imageId: number,
-        requestBody: AssetImageUpdate,
-    }): CancelablePromise<ApiResponse_ActorImageImageRead_> {
-        return __request(OpenAPI, {
-            method: 'PATCH',
-            url: '/api/v1/studio/assets/actor-images/{actor_image_id}/images/{image_id}',
-            path: {
-                'actor_image_id': actorImageId,
-                'image_id': imageId,
-            },
-            body: requestBody,
-            mediaType: 'application/json',
-            errors: {
-                422: `Validation Error`,
-            },
-        });
-    }
-    /**
-     * 删除演员形象图片
-     * @returns ApiResponse_NoneType_ Successful Response
-     * @throws ApiError
-     */
-    public static deleteActorImageImageApiV1StudioAssetsActorImagesActorImageIdImagesImageIdDelete({
-        actorImageId,
-        imageId,
-    }: {
-        actorImageId: string,
-        imageId: number,
-    }): CancelablePromise<ApiResponse_NoneType_> {
-        return __request(OpenAPI, {
-            method: 'DELETE',
-            url: '/api/v1/studio/assets/actor-images/{actor_image_id}/images/{image_id}',
-            path: {
-                'actor_image_id': actorImageId,
-                'image_id': imageId,
-            },
-            errors: {
-                422: `Validation Error`,
-            },
-        });
-    }
-    /**
      * 场景列表（分页）
      * @returns ApiResponse_PaginatedData_SceneRead__ Successful Response
      * @throws ApiError
      */
     public static listScenesApiV1StudioAssetsScenesGet({
-        projectId,
-        chapterId,
         q,
         order,
         isDesc = false,
         page = 1,
         pageSize = 10,
     }: {
-        projectId?: (string | null),
-        chapterId?: (string | null),
         /**
          * 关键字，过滤 name/description
          */
@@ -297,8 +48,6 @@ export class StudioAssetsService {
             method: 'GET',
             url: '/api/v1/studio/assets/scenes',
             query: {
-                'project_id': projectId,
-                'chapter_id': chapterId,
                 'q': q,
                 'order': order,
                 'is_desc': isDesc,
@@ -515,16 +264,12 @@ export class StudioAssetsService {
      * @throws ApiError
      */
     public static listPropsApiV1StudioAssetsPropsGet({
-        projectId,
-        chapterId,
         q,
         order,
         isDesc = false,
         page = 1,
         pageSize = 10,
     }: {
-        projectId?: (string | null),
-        chapterId?: (string | null),
         /**
          * 关键字，过滤 name/description
          */
@@ -538,8 +283,6 @@ export class StudioAssetsService {
             method: 'GET',
             url: '/api/v1/studio/assets/props',
             query: {
-                'project_id': projectId,
-                'chapter_id': chapterId,
                 'q': q,
                 'order': order,
                 'is_desc': isDesc,
@@ -756,16 +499,12 @@ export class StudioAssetsService {
      * @throws ApiError
      */
     public static listCostumesApiV1StudioAssetsCostumesGet({
-        projectId,
-        chapterId,
         q,
         order,
         isDesc = false,
         page = 1,
         pageSize = 10,
     }: {
-        projectId?: (string | null),
-        chapterId?: (string | null),
         /**
          * 关键字，过滤 name/description
          */
@@ -779,8 +518,6 @@ export class StudioAssetsService {
             method: 'GET',
             url: '/api/v1/studio/assets/costumes',
             query: {
-                'project_id': projectId,
-                'chapter_id': chapterId,
                 'q': q,
                 'order': order,
                 'is_desc': isDesc,

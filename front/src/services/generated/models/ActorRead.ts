@@ -8,24 +8,28 @@ export type ActorRead = {
      */
     id: string;
     /**
-     * 归属项目 ID（可空=全局演员）
-     */
-    project_id?: (string | null);
-    /**
-     * 演员名称
+     * 名称
      */
     name: string;
     /**
-     * 演员描述/备注
+     * 描述
      */
     description?: string;
-    /**
-     * 演员头像/缩略图
-     */
-    thumbnail?: string;
     /**
      * 标签
      */
     tags?: Array<string>;
+    /**
+     * 提示词模板 ID（可空）
+     */
+    prompt_template_id?: (string | null);
+    /**
+     * 计划为该演员生成的视角图片数量（不含分镜帧）
+     */
+    view_count?: number;
+    /**
+     * 缩略图下载地址
+     */
+    thumbnail?: string;
 };
 

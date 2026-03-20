@@ -70,6 +70,7 @@ class ChapterUpdate(BaseModel):
 
 class ChapterRead(ChapterBase):
     id: str
+    shot_count: int = Field(0, description="分镜数（shots 条数聚合）")
 
     class Config:
         from_attributes = True

@@ -8,6 +8,10 @@ import type { EvidenceSpan } from './EvidenceSpan';
  */
 export type DialogueLine = {
     /**
+     * 可选：镜头内排序（脚本处理链路用于保持原始顺序）
+     */
+    index?: (number | null);
+    /**
      * 说话人角色ID，若无法判定可为空
      */
     speaker_character_id?: (string | null);

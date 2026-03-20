@@ -3,8 +3,6 @@
 /* tslint:disable */
 /* eslint-disable */
 export type AssetUpdate = {
-    project_id?: (string | null);
-    chapter_id?: (string | null);
     name?: (string | null);
     description?: (string | null);
     tags?: (Array<string> | null);

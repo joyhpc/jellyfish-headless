@@ -20,9 +20,9 @@ export type CharacterCreate = {
      */
     description?: string;
     /**
-     * 演员 ID（可空）
+     * 演员 ID
      */
-    actor_id?: (string | null);
+    actor_id: string;
     /**
      * 服装 ID（可空）
      */

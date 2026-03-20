@@ -12,9 +12,10 @@ import { Link, useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { TAB_CONFIG, type TabKey, isTabKey, DEFAULT_TAB } from './constants'
 import { DashboardTab } from './tabs/DashboardTab'
 import { ChaptersTab } from './tabs/ChaptersTab'
+import { ActorsTab } from './tabs/ActorsTab'
 import { RolesTab } from './tabs/RolesTab'
 import { ScenesTab } from './tabs/ScenesTab'
-import { PropsTab } from './tabs/PropsTab'
+import { CostumesTab, PropsTab } from './tabs/PropsTab'
 import { FilesTab } from './tabs/FilesTab'
 import { EditTab } from './tabs/EditTab'
 import { SettingsTab } from './tabs/SettingsTab'
@@ -67,10 +68,12 @@ const ProjectWorkbench: React.FC = () => {
   }
 
   const moreMenuItems: MenuProps['items'] = [
+    { key: 'newActor', label: '关联演员', onClick: () => setTabInUrl('actors') },
     { key: 'newRole', label: '新建角色', onClick: () => setTabInUrl('roles') },
     { key: 'upload', label: '上传素材', onClick: () => navigate('/assets') },
     { key: 'newScene', label: '新建场景', onClick: () => setTabInUrl('scenes') },
     { key: 'newProp', label: '新建道具', onClick: () => setTabInUrl('props') },
+    { key: 'newCostume', label: '新建服装', onClick: () => setTabInUrl('costumes') },
   ]
 
   if (!project && !projectLoading) {
@@ -153,9 +156,11 @@ const ProjectWorkbench: React.FC = () => {
 
         {activeTab === 'chapters' && <ChaptersTab />}
 
+        {activeTab === 'actors' && <ActorsTab />}
         {activeTab === 'roles' && <RolesTab />}
         {activeTab === 'scenes' && <ScenesTab />}
         {activeTab === 'props' && <PropsTab />}
+        {activeTab === 'costumes' && <CostumesTab />}
         {activeTab === 'files' && <FilesTab />}
         {activeTab === 'edit' && <EditTab />}
         {activeTab === 'settings' && <SettingsTab />}

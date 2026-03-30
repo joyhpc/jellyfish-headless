@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Button, Card, Empty, Input, Modal, Space, message } from 'antd'
+import { Button, Card, Empty, Input, Modal, Space, message, Pagination } from 'antd'
 import { LinkOutlined, PlusOutlined } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
 import { StudioShotLinksService } from '../../../../../services/generated'
@@ -35,6 +35,17 @@ function LinkedAssetTab({
   const [links, setLinks] = useState<(ProjectPropLinkRead | ProjectCostumeLinkRead)[]>([])
   const [assets, setAssets] = useState<AssetItemLike[]>([])
   const [assetsById, setAssetsById] = useState<Record<string, AssetItemLike>>({})
+
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(12)
+  const pagedLinks = useMemo(() => {
+    const start = (page - 1) * pageSize
+    return links.slice(start, start + pageSize)
+  }, [links, page, pageSize])
+
+  useEffect(() => {
+    setPage(1)
+  }, [links.length])
 
   const loadLinks = async () => {
     setLoading(true)
@@ -165,7 +176,7 @@ function LinkedAssetTab({
   }
 
   return (
-    <>
+    <div className="h-full overflow-auto">
       <Card
         title={`项目${kind === 'prop' ? '道具' : '服装'}`}
         extra={
@@ -189,8 +200,9 @@ function LinkedAssetTab({
         {links.length === 0 && !loading ? (
           <Empty description={`暂无项目${kind === 'prop' ? '道具' : '服装'}`} image={Empty.PRESENTED_IMAGE_SIMPLE} />
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {links.map((l) => {
+          <div className="space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            {pagedLinks.map((l) => {
               const assetId = 'prop_id' in l ? l.prop_id : l.costume_id
               const asset = assetsById[assetId]
               const linkThumb = (l as any).thumbnail as string | undefined
@@ -227,6 +239,20 @@ function LinkedAssetTab({
                 />
               )
             })}
+            </div>
+            <div className="flex justify-end">
+              <Pagination
+                current={page}
+                pageSize={pageSize}
+                total={links.length}
+                showSizeChanger={false}
+                showTotal={(t) => `共 ${t} 条`}
+                onChange={(p, ps) => {
+                  setPage(p)
+                  setPageSize(ps)
+                }}
+              />
+            </div>
           </div>
         )}
       </Card>
@@ -276,7 +302,7 @@ function LinkedAssetTab({
           )}
         </div>
       </Modal>
-    </>
+    </div>
   )
 }
 

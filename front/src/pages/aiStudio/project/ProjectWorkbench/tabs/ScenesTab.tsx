@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Button, Card, Empty, Input, Modal, Space, message } from 'antd'
+import { Button, Card, Empty, Input, Modal, Space, message, Pagination } from 'antd'
 import { LinkOutlined, PlusOutlined } from '@ant-design/icons'
 import { useParams, useNavigate } from 'react-router-dom'
 import { StudioShotLinksService } from '../../../../../services/generated'
@@ -29,6 +29,17 @@ export function ScenesTab() {
   const [search, setSearch] = useState('')
   const [linkingId, setLinkingId] = useState<string | null>(null)
   const [unlinkingId, setUnlinkingId] = useState<number | null>(null)
+
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(12)
+  const pagedLinks = useMemo(() => {
+    const start = (page - 1) * pageSize
+    return links.slice(start, start + pageSize)
+  }, [links, page, pageSize])
+
+  useEffect(() => {
+    setPage(1)
+  }, [links.length])
 
   const loadLinks = async () => {
     if (!projectId) return
@@ -144,7 +155,7 @@ export function ScenesTab() {
   if (!projectId) return null
 
   return (
-    <>
+    <div className="h-full overflow-auto">
       <Card
         title="项目场景"
         extra={
@@ -168,8 +179,9 @@ export function ScenesTab() {
         {links.length === 0 && !linksLoading ? (
           <Empty description="暂无项目场景，可从资产库关联场景到本项目" image={Empty.PRESENTED_IMAGE_SIMPLE} />
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {links.map((l) => {
+          <div className="space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            {pagedLinks.map((l) => {
               const s = scenesById[l.scene_id]
               return (
                 <DisplayImageCard
@@ -204,6 +216,20 @@ export function ScenesTab() {
                 />
               )
             })}
+            </div>
+            <div className="flex justify-end">
+              <Pagination
+                current={page}
+                pageSize={pageSize}
+                total={links.length}
+                showSizeChanger={false}
+                showTotal={(t) => `共 ${t} 条`}
+                onChange={(p, ps) => {
+                  setPage(p)
+                  setPageSize(ps)
+                }}
+              />
+            </div>
           </div>
         )}
       </Card>
@@ -262,6 +288,6 @@ export function ScenesTab() {
           )}
         </div>
       </Modal>
-    </>
+    </div>
   )
 }

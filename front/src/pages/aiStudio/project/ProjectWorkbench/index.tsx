@@ -90,7 +90,7 @@ const ProjectWorkbench: React.FC = () => {
   }
 
   return (
-    <div className="space-y-0">
+    <div className="h-full min-h-0 flex flex-col">
       <div
         className="sticky top-0 z-20 bg-white border-b border-gray-200 shadow-sm"
         style={{ margin: -5, marginBottom: 0, padding: '16px 24px' }}
@@ -151,7 +151,10 @@ const ProjectWorkbench: React.FC = () => {
         </div>
       </div>
 
-      <div className="pt-4 animate-fadeIn" style={{ animation: 'fadeIn 0.25s ease-out' }}>
+      <div
+        className="pt-4 animate-fadeIn flex-1 min-h-0 overflow-hidden"
+        style={{ animation: 'fadeIn 0.25s ease-out' }}
+      >
         {activeTab === 'dashboard' && <DashboardTab onSelectTab={setTabInUrl} />}
 
         {activeTab === 'chapters' && <ChaptersTab />}

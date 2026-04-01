@@ -93,6 +93,7 @@ docker compose --env-file deploy/compose/.env -f deploy/compose/docker-compose.y
 ```
 
 首次启动会自动运行一次 `backend/init_db.py` 创建表结构（`backend-init-db` 服务）。
+并在其成功后自动导入提示词模板 SQL：`backend/sql/init_prompt_templte.sql`（`mysql-init-prompt-templates` 服务）。
 
 
 ## 🚧 开发状态 / Roadmap

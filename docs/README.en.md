@@ -93,6 +93,7 @@ docker compose --env-file deploy/compose/.env -f deploy/compose/docker-compose.y
 ```
 
 On the first start, `backend/init_db.py` will run once to create tables (`backend-init-db` service).
+After it succeeds, the prompt template SQL will be imported automatically: `backend/sql/init_prompt_templte.sql` (`mysql-init-prompt-templates` service).
 
 ## 🚧 Development status / Roadmap
 

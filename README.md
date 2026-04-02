@@ -5,6 +5,24 @@
 </p>
 
 <p align="center">
+  <a href="https://www.apache.org/licenses/LICENSE-2.0">
+    <img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License" />
+  </a>
+  <a href="https://img.shields.io/badge/frontend-React%20%2B%20Vite-61DAFB">
+    <img src="https://img.shields.io/badge/frontend-React%20%2B%20Vite-61DAFB" alt="Frontend" />
+  </a>
+  <a href="https://img.shields.io/badge/backend-FastAPI-009688">
+    <img src="https://img.shields.io/badge/backend-FastAPI-009688" alt="Backend" />
+  </a>
+  <a href="https://github.com/Forget-C/Jellyfish/actions/workflows/deploy-site.yml">
+    <img src="https://github.com/Forget-C/Jellyfish/actions/workflows/deploy-site.yml/badge.svg" alt="Deploy Site" />
+  </a>
+  <a href="https://github.com/Forget-C/Jellyfish/actions/workflows/ghcr-images.yml">
+    <img src="https://github.com/Forget-C/Jellyfish/actions/workflows/ghcr-images.yml/badge.svg" alt="Build and push images" />
+  </a>
+</p>
+
+<p align="center">
   <a href="./README.md">简体中文</a> ·
   <a href="./docs/README.en.md">English</a>
 </p>

@@ -430,6 +430,7 @@ export function ChapterShotEditPage() {
           chapter_id: chapterId,
           script_division: scriptDivision as any,
           consistency: undefined,
+          refresh_cache: false,
         } as any,
       })
       const next = res.data
@@ -466,7 +467,11 @@ export function ChapterShotEditPage() {
           }
           return merged
         })
-        message.success('提取完成（仅展示，未入库）')
+        if (res.meta?.from_cache) {
+          message.success('已从缓存加载提取结果（仅展示，未入库）')
+        } else {
+          message.success('提取完成（仅展示，未入库）')
+        }
       } else {
         message.error(res.message || '提取失败')
       }

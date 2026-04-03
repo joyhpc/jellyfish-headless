@@ -9,6 +9,7 @@ import {
   Input,
   Layout,
   Modal,
+  Progress,
   Radio,
   Segmented,
   Select,
@@ -42,6 +43,7 @@ import {
   PauseCircleOutlined,
   PictureOutlined,
   PlayCircleOutlined,
+  ReloadOutlined,
   ScissorOutlined,
   SettingOutlined,
   SoundOutlined,
@@ -58,7 +60,9 @@ import {
 import { useParams, Link } from 'react-router-dom'
 import {
   FilmService,
+  ScriptProcessingService,
   StudioChaptersService,
+  StudioEntitiesService,
   StudioFilesService,
   StudioImageTasksService,
   StudioShotCharacterLinksService,
@@ -74,6 +78,7 @@ import type {
   CameraMovement,
   CameraShotType,
   ChapterRead,
+  EntityNameExistenceItem,
   ProjectActorLinkRead,
   ProjectCostumeLinkRead,
   ShotDetailRead,
@@ -84,6 +89,7 @@ import type {
   ShotRead,
   ProjectSceneLinkRead,
   ShotStatus,
+  StudioScriptExtractionDraft,
 } from '../../../services/generated'
 import { listTaskLinksNormalized } from '../../../services/filmTaskLinks'
 import { buildFileDownloadUrl, resolveAssetUrl } from '../assets/utils'
@@ -116,6 +122,12 @@ type StudioShot = ShotRead & {
   hasProblem?: boolean
   hasSpeech?: boolean
   hasMusic?: boolean
+}
+
+type ShotExtractCacheEntry = {
+  signature: string
+  data: StudioScriptExtractionDraft | null
+  fromCache: boolean
 }
 
 type LayoutPrefs = {
@@ -151,6 +163,24 @@ function reorder<T>(list: T[], startIndex: number, endIndex: number) {
   const result = [...list]
   const [removed] = result.splice(startIndex, 1)
   result.splice(endIndex, 0, removed)
+  return result
+}
+
+function normalizeAssetName(value?: string | null) {
+  return String(value ?? '').trim().toLowerCase()
+}
+
+function uniqueNames(values: Array<string | null | undefined>) {
+  const seen = new Set<string>()
+  const result: string[] = []
+  values.forEach((value) => {
+    const raw = String(value ?? '').trim()
+    if (!raw) return
+    const key = normalizeAssetName(raw)
+    if (!key || seen.has(key)) return
+    seen.add(key)
+    result.push(raw)
+  })
   return result
 }
 
@@ -257,6 +287,10 @@ const ChapterStudio: React.FC = () => {
   }>()
   const [chapter, setChapter] = useState<Chapter | null>(null)
   const [shots, setShots] = useState<StudioShot[]>([])
+  const shotExtractCacheRef = useRef<Record<string, ShotExtractCacheEntry>>({})
+  const shotExtractBatchSeqRef = useRef(0)
+  const [shotExtractCacheVersion, setShotExtractCacheVersion] = useState(0)
+  const [shotExtractBatchLoading, setShotExtractBatchLoading] = useState(false)
   const [selectedShotId, setSelectedShotId] = useState<string | null>(null)
   const [selectedShotIds, setSelectedShotIds] = useState<string[]>([])
   const lastSelectedIndexRef = useRef<number>(-1)
@@ -337,6 +371,87 @@ const ChapterStudio: React.FC = () => {
     setShots((prev) => prev.map((s) => (ids.includes(s.id) ? { ...s, hidden: next.has(s.id) } : s)))
   }
 
+  const prefetchShotExtractCandidatesBatch = useCallback(
+    async (sourceShots: StudioShot[]) => {
+      if (!projectId || !chapterId || sourceShots.length === 0) return
+
+      const pending = sourceShots.filter((shot) => {
+        const signature = JSON.stringify({
+          index: shot.index,
+          title: shot.title ?? '',
+          script_excerpt: shot.script_excerpt ?? '',
+        })
+        const cached = shotExtractCacheRef.current[shot.id]
+        return !cached || cached.signature !== signature
+      })
+
+      if (pending.length === 0) return
+
+      const seq = ++shotExtractBatchSeqRef.current
+      setShotExtractBatchLoading(true)
+      try {
+        const signatureById = new Map(
+          pending.map((shot) => [
+            shot.id,
+            JSON.stringify({
+              index: shot.index,
+              title: shot.title ?? '',
+              script_excerpt: shot.script_excerpt ?? '',
+            }),
+          ]),
+        )
+        const res = await ScriptProcessingService.extractScriptApiV1ScriptProcessingExtractPost({
+          requestBody: {
+            project_id: projectId,
+            chapter_id: chapterId,
+            script_division: {
+              total_shots: pending.length,
+              shots: pending.map((shot) => ({
+                index: shot.index,
+                start_line: 1,
+                end_line: 1,
+                script_excerpt: shot.script_excerpt ?? '',
+                shot_name: shot.title ?? '',
+              })),
+            } as any,
+            consistency: undefined,
+            refresh_cache: false,
+          } as any,
+        })
+        if (seq !== shotExtractBatchSeqRef.current) return
+
+        const data = (res.data ?? null) as StudioScriptExtractionDraft | null
+        const fromCache = Boolean(res.meta?.from_cache)
+        const shotDrafts = data?.shots ?? []
+        pending.forEach((shot) => {
+          const draft = shotDrafts.find((item) => item.index === shot.index) ?? null
+          shotExtractCacheRef.current[shot.id] = {
+            signature: signatureById.get(shot.id) ?? '',
+            fromCache,
+            data: draft
+              ? {
+                  project_id: data?.project_id ?? projectId,
+                  chapter_id: data?.chapter_id ?? chapterId,
+                  script_text: data?.script_text ?? shot.script_excerpt ?? '',
+                  characters: data?.characters ?? [],
+                  scenes: data?.scenes ?? [],
+                  props: data?.props ?? [],
+                  costumes: data?.costumes ?? [],
+                  shots: [draft],
+                }
+              : null,
+          }
+        })
+        setShotExtractCacheVersion((v) => v + 1)
+      } catch {
+        // 批量预取失败不打断工作台，选中具体分镜时仍可按单镜头回退提取
+      } finally {
+        if (seq === shotExtractBatchSeqRef.current) setShotExtractBatchLoading(false)
+      }
+    },
+    [chapterId, projectId],
+  )
+
   const loadShots = async () => {
     if (!chapterId) return
     setLoadingShots(true)
@@ -362,6 +477,7 @@ const ChapterStudio: React.FC = () => {
         }))
 
       setShots(enriched)
+      void prefetchShotExtractCandidatesBatch(enriched)
 
       const selectedExists = selectedShotId ? enriched.some((s) => s.id === selectedShotId) : false
       if (!selectedShotId || !selectedExists) {
@@ -2042,6 +2158,10 @@ const ChapterStudio: React.FC = () => {
             >
               <Inspector
                 projectId={projectId}
+                chapterId={chapterId}
+                shotExtractCacheRef={shotExtractCacheRef}
+                shotExtractCacheVersion={shotExtractCacheVersion}
+                shotExtractBatchLoading={shotExtractBatchLoading}
                 loadingDetail={loadingDetail}
                 shotDetail={shotDetail}
                 dialogLines={dialogLines}
@@ -2106,6 +2226,10 @@ const ChapterStudio: React.FC = () => {
                 <div className="flex-1 min-w-0 overflow-hidden">
                   <Inspector
                     projectId={projectId}
+                    chapterId={chapterId}
+                    shotExtractCacheRef={shotExtractCacheRef}
+                    shotExtractCacheVersion={shotExtractCacheVersion}
+                    shotExtractBatchLoading={shotExtractBatchLoading}
                     loadingDetail={loadingDetail}
                     shotDetail={shotDetail}
                     dialogLines={dialogLines}
@@ -2157,6 +2281,10 @@ export default ChapterStudio
 
 function Inspector(props: {
   projectId?: string
+  chapterId?: string
+  shotExtractCacheRef: React.MutableRefObject<Record<string, ShotExtractCacheEntry>>
+  shotExtractCacheVersion: number
+  shotExtractBatchLoading: boolean
   loadingDetail: boolean
   shotDetail: ShotDetailRead | null
   dialogLines: ShotDialogLineRead[]
@@ -2186,6 +2314,10 @@ function Inspector(props: {
 }) {
   const {
     projectId,
+    chapterId,
+    shotExtractCacheRef,
+    shotExtractCacheVersion,
+    shotExtractBatchLoading,
     loadingDetail,
     shotDetail,
     dialogLines,
@@ -2212,6 +2344,7 @@ function Inspector(props: {
     onSelectPreviewVideo,
     onRefreshShotFrameImages,
   } = props
+  const currentChapterId = chapterId ?? null
   const [imageVersion, setImageVersion] = useState('v1')
   const [refImageType, setRefImageType] = useState<string | undefined>(undefined)
   const [refFrameTypeSelectLoading, setRefFrameTypeSelectLoading] = useState(false)
@@ -2232,7 +2365,21 @@ function Inspector(props: {
   const [shotLinkedAssets, setShotLinkedAssets] = useState<
     Array<{ type: string; id: string; name?: string; thumbnail?: string; image_id?: number | null }>
   >([])
+  const [shotExtractCandidates, setShotExtractCandidates] = useState<StudioScriptExtractionDraft | null>(null)
+  const [shotExtractOwnerId, setShotExtractOwnerId] = useState<string | null>(null)
+  const [shotExtractCandidatesLoading, setShotExtractCandidatesLoading] = useState(false)
   const [shotRenderPromptLoading, setShotRenderPromptLoading] = useState(false)
+  const [shotExtractStatus, setShotExtractStatus] = useState<{
+    source: 'idle' | 'fresh' | 'cache' | 'failed'
+    updatedAt: number | null
+    message: string
+  }>({
+    source: 'idle',
+    updatedAt: null,
+    message: '',
+  })
+  const [readinessExistenceMap, setReadinessExistenceMap] = useState<Record<string, EntityNameExistenceItem>>({})
+  const [readinessExistenceLoading, setReadinessExistenceLoading] = useState(false)
 
   const [linkSceneOpen, setLinkSceneOpen] = useState(false)
   const [linkSceneLoading, setLinkSceneLoading] = useState(false)
@@ -2436,6 +2583,129 @@ function Inspector(props: {
     }
   }, [selectedShot?.id])
 
+  const extractShotAssetsForReadiness = useCallback(
+    async (force = false) => {
+      if (!projectId || !currentChapterId || !selectedShot?.id) {
+        setShotExtractCandidates(null)
+        setShotExtractOwnerId(null)
+        setShotExtractCandidatesLoading(false)
+        return
+      }
+      const shotId = selectedShot.id
+      const signature = JSON.stringify({
+        index: selectedShot.index,
+        title: selectedShot.title ?? '',
+        script_excerpt: selectedShot.script_excerpt ?? '',
+      })
+      const cached = shotExtractCacheRef.current[shotId]
+      if (!force && cached && cached.signature === signature) {
+        setShotExtractCandidates(cached.data)
+        setShotExtractOwnerId(shotId)
+        setShotExtractStatus({
+          source: cached.fromCache ? 'cache' : 'fresh',
+          updatedAt: Date.now(),
+          message: cached.fromCache ? '当前显示的是缓存的提取结果' : '当前显示的是已预取的最新提取结果',
+        })
+        return
+      }
+
+      setShotExtractCandidatesLoading(true)
+      try {
+        const scriptDivision = {
+          total_shots: 1,
+          shots: [
+            {
+              index: selectedShot.index,
+              start_line: 1,
+              end_line: 1,
+              script_excerpt: selectedShot.script_excerpt ?? '',
+              shot_name: selectedShot.title ?? '',
+            },
+          ],
+        }
+        const res = await ScriptProcessingService.extractScriptApiV1ScriptProcessingExtractPost({
+          requestBody: {
+            project_id: projectId,
+            chapter_id: currentChapterId,
+            script_division: scriptDivision as any,
+            consistency: undefined,
+            refresh_cache: force,
+          } as any,
+        })
+        const data = (res.data ?? null) as StudioScriptExtractionDraft | null
+        const fromCache = Boolean(res.meta?.from_cache)
+        shotExtractCacheRef.current[shotId] = { signature, data, fromCache }
+        setShotExtractCandidates(data)
+        setShotExtractOwnerId(shotId)
+        setShotExtractStatus({
+          source: fromCache ? 'cache' : 'fresh',
+          updatedAt: Date.now(),
+          message: fromCache ? '当前显示的是缓存的提取结果' : '已完成最新一轮提取',
+        })
+      } catch {
+        setShotExtractCandidates(null)
+        setShotExtractOwnerId(shotId)
+        setShotExtractStatus({
+          source: 'failed',
+          updatedAt: Date.now(),
+          message: '提取失败，当前没有可用结果',
+        })
+      } finally {
+        setShotExtractCandidatesLoading(false)
+      }
+    },
+    [currentChapterId, projectId, selectedShot?.id, selectedShot?.index, selectedShot?.script_excerpt, selectedShot?.title],
+  )
+
+  useEffect(() => {
+    if (!selectedShot?.id) {
+      setShotExtractCandidates(null)
+      setShotExtractOwnerId(null)
+      setShotExtractCandidatesLoading(false)
+      return
+    }
+    const shotId = selectedShot.id
+    const signature = JSON.stringify({
+      index: selectedShot.index,
+      title: selectedShot.title ?? '',
+      script_excerpt: selectedShot.script_excerpt ?? '',
+    })
+    const cached = shotExtractCacheRef.current[shotId]
+
+    if (cached && cached.signature === signature) {
+      setShotExtractCandidates(cached.data)
+      setShotExtractOwnerId(shotId)
+      setShotExtractCandidatesLoading(false)
+      setShotExtractStatus({
+        source: cached.fromCache ? 'cache' : 'fresh',
+        updatedAt: Date.now(),
+        message: cached.fromCache ? '当前显示的是缓存的提取结果' : '当前显示的是已预取的最新提取结果',
+      })
+      return
+    }
+
+    if (shotExtractBatchLoading) {
+      setShotExtractCandidatesLoading(true)
+      setShotExtractStatus({
+        source: 'idle',
+        updatedAt: null,
+        message: '正在批量提取本章分镜候选资产…',
+      })
+      return
+    }
+
+    void extractShotAssetsForReadiness()
+  }, [
+    extractShotAssetsForReadiness,
+    selectedShot?.id,
+    selectedShot?.index,
+    selectedShot?.script_excerpt,
+    selectedShot?.title,
+    shotExtractBatchLoading,
+    shotExtractCacheRef,
+    shotExtractCacheVersion,
+  ])
+
   const linkedAssetThumbByKey = useMemo(() => {
     const map = new Map<string, string>()
     shotLinkedAssets.forEach((it) => {
@@ -2444,6 +2714,212 @@ function Inspector(props: {
     })
     return map
   }, [shotLinkedAssets])
+
+  const extractedShotDraft = useMemo(() => {
+    if (!selectedShot?.id || shotExtractOwnerId !== selectedShot.id) return null
+    const shots = shotExtractCandidates?.shots ?? []
+    if (shots.length === 0) return null
+    return shots.find((x) => x.index === selectedShot?.index) ?? shots[0]
+  }, [selectedShot?.id, selectedShot?.index, shotExtractCandidates?.shots, shotExtractOwnerId])
+
+  const extractedAssetSummary = useMemo(() => {
+    return {
+      sceneName: extractedShotDraft?.scene_name?.trim() || null,
+      characterNames: uniqueNames(extractedShotDraft?.character_names ?? []),
+      propNames: uniqueNames(extractedShotDraft?.prop_names ?? []),
+      costumeNames: uniqueNames(extractedShotDraft?.costume_names ?? []),
+    }
+  }, [extractedShotDraft])
+
+  const linkedCharacterNames = useMemo(
+    () => uniqueNames(linkedCharacterIds.map((id) => characterNameMap[id] ?? id)),
+    [characterNameMap, linkedCharacterIds],
+  )
+
+  const linkedSceneNameResolved = useMemo(
+    () => (linkedSceneId ? (sceneNameMap[linkedSceneId] ?? linkedSceneId) : null),
+    [linkedSceneId, sceneNameMap],
+  )
+
+  const promptAssetReadiness = useMemo(() => {
+    const compareMissing = (expected: string[], actual: string[]) => {
+      const actualSet = new Set(actual.map((item) => normalizeAssetName(item)))
+      return expected.filter((item) => !actualSet.has(normalizeAssetName(item)))
+    }
+
+    const checks = [
+      {
+        key: 'characters',
+        label: '角色',
+        importance: '影响人物一致性、关键帧参考图和画面主体描述。',
+        expected: extractedAssetSummary.characterNames,
+        actual: linkedCharacterNames,
+      },
+      {
+        key: 'scene',
+        label: '场景',
+        importance: '影响镜头环境描述、视频提示词和整体空间连续性。',
+        expected: extractedAssetSummary.sceneName ? [extractedAssetSummary.sceneName] : [],
+        actual: linkedSceneNameResolved ? [linkedSceneNameResolved] : [],
+      },
+      {
+        key: 'props',
+        label: '道具',
+        importance: '影响关键动作细节，缺失时容易让画面叙事元素不完整。',
+        expected: extractedAssetSummary.propNames,
+        actual: uniqueNames(
+          linkedPropIds.map((id) => shotLinkedAssets.find((x) => x.type === 'prop' && x.id === id)?.name ?? id),
+        ),
+      },
+      {
+        key: 'costumes',
+        label: '服装',
+        importance: '影响角色外观连续性，尤其在多镜头或生成多版本时更明显。',
+        expected: extractedAssetSummary.costumeNames,
+        actual: uniqueNames(
+          linkedCostumeIds.map((id) => shotLinkedAssets.find((x) => x.type === 'costume' && x.id === id)?.name ?? id),
+        ),
+      },
+    ].map((item) => {
+      const missing = compareMissing(item.expected, item.actual)
+      return {
+        ...item,
+        missing,
+        expectedCount: item.expected.length,
+        actualCount: item.actual.length,
+        ready: item.expected.length === 0 || missing.length === 0,
+      }
+    })
+
+    const expectedChecks = checks.filter((item) => item.expectedCount > 0)
+    const readyCount = expectedChecks.filter((item) => item.ready).length
+    return {
+      checks,
+      expectedChecks,
+      readyCount,
+      totalCount: expectedChecks.length,
+      percent: expectedChecks.length === 0 ? 100 : Math.round((readyCount / expectedChecks.length) * 100),
+      hasMissing: expectedChecks.some((item) => item.missing.length > 0),
+    }
+  }, [
+    extractedAssetSummary.characterNames,
+    extractedAssetSummary.costumeNames,
+    extractedAssetSummary.propNames,
+    extractedAssetSummary.sceneName,
+    linkedCharacterNames,
+    linkedCostumeIds,
+    linkedPropIds,
+    linkedSceneNameResolved,
+    shotLinkedAssets,
+  ])
+
+  useEffect(() => {
+    if (!projectId || !selectedShot?.id) {
+      setReadinessExistenceMap({})
+      return
+    }
+
+    const characterNames = extractedAssetSummary.characterNames
+      .filter((name) => !linkedCharacterNames.some((linked) => normalizeAssetName(linked) === normalizeAssetName(name)))
+    const sceneNames = extractedAssetSummary.sceneName
+      ? (linkedSceneNameResolved && normalizeAssetName(linkedSceneNameResolved) === normalizeAssetName(extractedAssetSummary.sceneName)
+          ? []
+          : [extractedAssetSummary.sceneName])
+      : []
+    const propNames = extractedAssetSummary.propNames
+      .filter((name) => !linkedPropIds.some((id) => normalizeAssetName(shotLinkedAssets.find((x) => x.type === 'prop' && x.id === id)?.name ?? id) === normalizeAssetName(name)))
+    const costumeNames = extractedAssetSummary.costumeNames
+      .filter((name) => !linkedCostumeIds.some((id) => normalizeAssetName(shotLinkedAssets.find((x) => x.type === 'costume' && x.id === id)?.name ?? id) === normalizeAssetName(name)))
+
+    if (characterNames.length === 0 && sceneNames.length === 0 && propNames.length === 0 && costumeNames.length === 0) {
+      setReadinessExistenceMap({})
+      return
+    }
+
+    let cancelled = false
+    setReadinessExistenceLoading(true)
+    void (async () => {
+      try {
+        const res = await StudioEntitiesService.checkEntityNamesExistenceApiV1StudioEntitiesExistenceCheckPost({
+          requestBody: {
+            project_id: projectId,
+            shot_id: selectedShot.id,
+            character_names: characterNames,
+            scene_names: sceneNames,
+            prop_names: propNames,
+            costume_names: costumeNames,
+          },
+        })
+        if (cancelled) return
+        const data = res.data
+        const next: Record<string, EntityNameExistenceItem> = {}
+        ;(data?.characters ?? []).forEach((item) => {
+          next[`characters:${normalizeAssetName(item.name)}`] = item
+        })
+        ;(data?.scenes ?? []).forEach((item) => {
+          next[`scene:${normalizeAssetName(item.name)}`] = item
+        })
+        ;(data?.props ?? []).forEach((item) => {
+          next[`props:${normalizeAssetName(item.name)}`] = item
+        })
+        ;(data?.costumes ?? []).forEach((item) => {
+          next[`costumes:${normalizeAssetName(item.name)}`] = item
+        })
+        setReadinessExistenceMap(next)
+      } catch {
+        if (!cancelled) setReadinessExistenceMap({})
+      } finally {
+        if (!cancelled) setReadinessExistenceLoading(false)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    extractedAssetSummary.characterNames,
+    extractedAssetSummary.costumeNames,
+    extractedAssetSummary.propNames,
+    extractedAssetSummary.sceneName,
+    linkedCharacterNames,
+    linkedCostumeIds,
+    linkedPropIds,
+    linkedSceneNameResolved,
+    projectId,
+    selectedShot?.id,
+    shotLinkedAssets,
+  ])
+
+  const getReadinessExistenceLabel = useCallback((checkKey: 'characters' | 'scene' | 'props' | 'costumes', name: string) => {
+    const item = readinessExistenceMap[`${checkKey}:${normalizeAssetName(name)}`]
+    if (!item) {
+      return readinessExistenceLoading ? '检测中' : null
+    }
+    if (!item.exists) return '需新建'
+    if (item.linked_to_project && !item.linked_to_shot) return '项目内可关联'
+    if (!item.linked_to_project) return '资产库已有'
+    if (item.linked_to_shot) return '已关联'
+    return null
+  }, [readinessExistenceLoading, readinessExistenceMap])
+
+
+  const promptAssetReadinessNote = useMemo(() => {
+    if (!selectedShot) return '请先选择一个分镜。'
+    if (!shotExtractCandidates) return '当前还没有拿到这条分镜的剧本提取候选，暂时无法对比提取结果与实际关联状态。'
+    return '这里依据的是当前分镜的剧本提取候选与已关联资产的对比结果，用来判断哪些提取结果还没落到当前镜头。'
+  }, [selectedShot, shotExtractCandidates])
+
+  const shotExtractStatusText = useMemo(() => {
+    if (shotExtractCandidatesLoading) return '正在提取当前分镜的候选资产…'
+    if (!shotExtractStatus.message) return ''
+    if (!shotExtractStatus.updatedAt) return shotExtractStatus.message
+    const time = new Date(shotExtractStatus.updatedAt).toLocaleTimeString('zh-CN', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    })
+    return `${shotExtractStatus.message} · ${time}`
+  }, [shotExtractCandidatesLoading, shotExtractStatus])
 
   const extractFileIdFromThumbnail = useCallback((thumbnail?: string | null): string | null => {
     const v = (thumbnail || '').trim()
@@ -2667,6 +3143,59 @@ function Inspector(props: {
       if (kind === 'costume') setLinkCostumeLoading(false)
     }
   }
+
+  const openReadinessLinker = useCallback(
+    async (kind: 'characters' | 'scene' | 'props' | 'costumes') => {
+      if (!selectedShot?.id) return
+      if (kind === 'characters') {
+        setInspectorTabKey('keyframe_gen')
+        setLinkRoleSelectedIds([])
+        setLinkRoleOpen(true)
+        await loadProjectRoleOptions()
+        return
+      }
+      if (kind === 'scene') {
+        setInspectorTabKey('keyframe_gen')
+        setLinkSceneOpen(true)
+        await loadProjectAssetOptions('scene')
+        return
+      }
+      if (kind === 'props') {
+        setInspectorTabKey('keyframe_gen')
+        setLinkPropSelectedIds([])
+        setLinkPropOpen(true)
+        await loadProjectAssetOptions('prop')
+        return
+      }
+      setInspectorTabKey('keyframe_gen')
+      setLinkCostumeSelectedIds([])
+      setLinkCostumeOpen(true)
+      await loadProjectAssetOptions('costume')
+    },
+    [loadProjectAssetOptions, loadProjectRoleOptions, selectedShot?.id],
+  )
+
+  const openReadinessCreate = useCallback((kind: 'characters' | 'scene' | 'props' | 'costumes', name: string) => {
+    if (!projectId || !selectedShot?.id) return
+    const currentShotId = selectedShot.id
+    const ctxQ = `&projectId=${encodeURIComponent(projectId)}&chapterId=${encodeURIComponent(currentChapterId ?? '')}&shotId=${encodeURIComponent(currentShotId)}`
+    const open = (url: string) => window.open(url, '_blank', 'noopener,noreferrer')
+    if (kind === 'characters') {
+      open(`/projects/${encodeURIComponent(projectId)}?tab=roles&create=1&name=${encodeURIComponent(name)}${ctxQ}`)
+      return
+    }
+    const tab = kind === 'scene' ? 'scene' : kind === 'props' ? 'prop' : 'costume'
+    open(`/assets?tab=${tab}&create=1&name=${encodeURIComponent(name)}${ctxQ}`)
+  }, [currentChapterId, projectId, selectedShot?.id])
+
+  const handleReadinessMissingAction = useCallback(async (kind: 'characters' | 'scene' | 'props' | 'costumes', name: string) => {
+    const item = readinessExistenceMap[`${kind}:${normalizeAssetName(name)}`]
+    if (item && !item.exists) {
+      openReadinessCreate(kind, name)
+      return
+    }
+    await openReadinessLinker(kind)
+  }, [openReadinessCreate, openReadinessLinker, readinessExistenceMap])
 
   useEffect(() => {
     if (sceneIds.length === 0) {
@@ -3306,26 +3835,143 @@ function Inspector(props: {
               label: '画面描述',
               children: (
                 <div>
+                  <div className="cs-group cs-readiness-card">
+                    <div className="cs-group-title">
+                      <CheckCircleOutlined /> 资产就绪度
+                    </div>
+                    <div className="cs-readiness-note">
+                      {promptAssetReadinessNote}
+                    </div>
+                    {shotExtractStatusText ? (
+                      <div className={`cs-readiness-status is-${shotExtractStatus.source}`}>
+                        <span>{shotExtractStatusText}</span>
+                        <Tooltip title="重新提取当前分镜">
+                          <Button
+                            type="text"
+                            size="small"
+                            className="cs-readiness-status__refresh"
+                            icon={<ReloadOutlined spin={shotExtractCandidatesLoading} />}
+                            onClick={() => void extractShotAssetsForReadiness(true)}
+                          />
+                        </Tooltip>
+                      </div>
+                    ) : null}
+
+                    {!selectedShot ? (
+                      <div className="text-xs text-gray-400 mt-3">请先选择一个分镜。</div>
+                    ) : !extractedShotDraft && shotExtractCandidatesLoading ? (
+                      <div className="py-4 text-center">
+                        <Spin size="small" />
+                      </div>
+                    ) : !extractedShotDraft ? (
+                      <div className="text-xs text-gray-400 mt-3">当前分镜还没有提取到可用的候选资产。</div>
+                    ) : (
+                      <div className={`space-y-4 mt-3 ${shotExtractCandidatesLoading ? 'cs-readiness-content is-refreshing' : ''}`}>
+                        <div className="cs-readiness-summary">
+                          <div>
+                            <div className="cs-readiness-summary__title">
+                              {promptAssetReadiness.hasMissing ? '已提取到候选资产，但还有部分未关联' : '提取到的主要资产已完成关联'}
+                            </div>
+                            <div className="cs-readiness-summary__desc">
+                              已完成 {promptAssetReadiness.readyCount}/{promptAssetReadiness.totalCount || 0} 项关键资产关联检查
+                            </div>
+                          </div>
+                          <div className="cs-readiness-summary__progress">
+                            <Progress
+                              type="circle"
+                              size={68}
+                              percent={promptAssetReadiness.percent}
+                              strokeColor={promptAssetReadiness.hasMissing ? '#f59e0b' : '#10b981'}
+                            />
+                          </div>
+                        </div>
+
+                        <div className="cs-readiness-grid">
+                          {promptAssetReadiness.checks.map((item) => (
+                            <div key={item.key} className={`cs-readiness-item ${item.ready ? 'is-ready' : 'is-missing'}`}>
+                              <div className="cs-readiness-item__header">
+                                <span className="cs-readiness-item__label">{item.label}</span>
+                                <Tag color={item.ready ? 'success' : item.expectedCount === 0 ? 'default' : 'warning'}>
+                                  {item.expectedCount === 0 ? '未提取到' : item.ready ? '已就绪' : `缺 ${item.missing.length}`}
+                                </Tag>
+                              </div>
+                              <div className="cs-readiness-item__meta">
+                                提取到 {item.expectedCount} 项，当前已关联 {item.actualCount} 项
+                              </div>
+                              <div className="cs-readiness-item__importance">
+                                {item.importance}
+                              </div>
+                              {item.expectedCount > 0 ? (
+                                <div className="cs-readiness-item__chips">
+                                  {item.expected.map((name) => {
+                                    const missing = item.missing.some((x) => normalizeAssetName(x) === normalizeAssetName(name))
+                                    const existenceLabel = missing
+                                      ? getReadinessExistenceLabel(item.key as 'characters' | 'scene' | 'props' | 'costumes', name)
+                                      : null
+                                    return (
+                                      <span key={name} className="cs-readiness-chip-wrap">
+                                        <Tag
+                                          color={missing ? 'orange' : 'green'}
+                                          className={missing ? 'cs-readiness-tag-action' : undefined}
+                                          onClick={missing ? () => void handleReadinessMissingAction(item.key as 'characters' | 'scene' | 'props' | 'costumes', name) : undefined}
+                                        >
+                                          {missing ? `待补：${name}` : name}
+                                        </Tag>
+                                        {missing && existenceLabel ? (
+                                          <span className="cs-readiness-chip-meta">{existenceLabel}</span>
+                                        ) : null}
+                                      </span>
+                                    )
+                                  })}
+                                </div>
+                              ) : (
+                                <div className="cs-readiness-item__empty">当前分镜的剧本提取结果里还没有识别到这类资产</div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
                   <div className="cs-group">
                     <div className="cs-group-title">
-                      <PictureOutlined /> 画面要素
+                      <PictureOutlined /> 氛围描述
                     </div>
-                    <div className="space-y-4">
-                      <div>
-                        <div className="text-gray-500 text-xs mb-1">角色</div>
-                        <Select
-                          mode="multiple"
-                          placeholder="多选当前镜头角色"
-                          className="w-full"
-                          value={Array.from(new Set(shotCharacterLinks.map((x) => x.character_id)))}
-                          onChange={(vals) => void onUpdatePromptActors((vals as Array<string | number>).map((v) => String(v)))}
-                          disabled={promptAssetsUpdating}
-                          optionLabelProp="label"
-                          options={characterIds.map((id) => ({ value: id, label: characterNameMap[id] ?? id }))}
+                    <div>
+                        <div className="flex items-center justify-between">
+                          <div className="text-gray-500 text-xs">氛围描述</div>
+                          <Switch
+                            size="small"
+                            checked={shotDetail?.follow_atmosphere ?? false}
+                            onChange={(v) => onPatchShotDetail({ follow_atmosphere: v })}
+                          />
+                        </div>
+                        <TextArea
+                          rows={3}
+                          placeholder="氛围描述…（可选跟随画面）"
+                          value={shotDetail?.atmosphere ?? ''}
+                          onChange={(e) => onPatchShotDetail({ atmosphere: e.target.value })}
                         />
-                      </div>
+                    </div>
+                  </div>
+
+                </div>
+              ),
+            },
+            {
+              key: 'dialogue',
+              label: '对白',
+              children: (
+                <div>
+                  <div className="cs-group">
+                    <div className="cs-group-title">
+                      <SoundOutlined /> 对白编辑
+                    </div>
+                    <div className="cs-hint">这里单独处理当前镜头对白，避免和资产关联、画面描述混在一起。</div>
+                    <div className="space-y-4 mt-3">
                       <div>
-                        <div className="text-gray-500 text-xs mb-1">对白（说话人 + 富文本占位）</div>
+                        <div className="text-gray-500 text-xs mb-1">新增对白</div>
                         <Space.Compact className="w-full">
                           <Select
                             size="small"
@@ -3356,8 +4002,12 @@ function Inspector(props: {
                             }}
                           />
                         </Space.Compact>
-                        {dialogLines.length > 0 && (
-                          <div className="mt-2 space-y-1">
+                      </div>
+
+                      <div>
+                        <div className="text-gray-500 text-xs mb-2">当前对白</div>
+                        {dialogLines.length > 0 ? (
+                          <div className="space-y-1">
                             {dialogLines.slice().sort((a, b) => (a.index ?? 0) - (b.index ?? 0)).map((l) => (
                               <div key={l.id} className="flex items-center gap-2">
                                 <div className="text-xs text-gray-600 truncate flex-1 min-w-0">{l.text}</div>
@@ -3386,27 +4036,12 @@ function Inspector(props: {
                               </div>
                             ))}
                           </div>
+                        ) : (
+                          <div className="text-xs text-gray-400">当前镜头还没有对白。</div>
                         )}
-                      </div>
-                      <div>
-                        <div className="flex items-center justify-between">
-                          <div className="text-gray-500 text-xs">氛围描述</div>
-                          <Switch
-                            size="small"
-                            checked={shotDetail?.follow_atmosphere ?? false}
-                            onChange={(v) => onPatchShotDetail({ follow_atmosphere: v })}
-                          />
-                        </div>
-                        <TextArea
-                          rows={3}
-                          placeholder="氛围描述…（可选跟随画面）"
-                          value={shotDetail?.atmosphere ?? ''}
-                          onChange={(e) => onPatchShotDetail({ atmosphere: e.target.value })}
-                        />
                       </div>
                     </div>
                   </div>
-
                 </div>
               ),
             },

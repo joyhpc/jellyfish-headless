@@ -40,6 +40,11 @@ from app.schemas.skills.costume_info_analysis import CostumeInfoAnalysisResult
 from app.schemas.skills.prop_info_analysis import PropInfoAnalysisResult
 from app.schemas.skills.scene_info_analysis import SceneInfoAnalysisResult
 from app.services.common import required_field
+from app.services.script_extraction_cache import (
+    build_script_extract_cache_key,
+    get_cached_script_extract,
+    set_cached_script_extract,
+)
 from app.services.studio.script_division import write_division_result_to_chapter
 
 logger = logging.getLogger(__name__)
@@ -520,6 +525,7 @@ class ScriptExtractRequest(BaseModel):
     chapter_id: str = Field(..., description="章节 ID", min_length=1)
     script_division: dict[str, Any] = Field(..., description="分镜结果（ScriptDivisionResult 序列化）")
     consistency: dict[str, Any] | None = Field(None, description="一致性检查结果（可选；ScriptConsistencyCheckResult 序列化）")
+    refresh_cache: bool = Field(False, description="是否跳过后端缓存并强制重新提取")
 
 
 @router.post(
@@ -533,6 +539,17 @@ async def extract_script(
     llm: BaseChatModel = Depends(get_nothinking_llm),
 ) -> ApiResponse[StudioScriptExtractionDraft]:
     try:
+        cache_key = build_script_extract_cache_key(
+            project_id=request.project_id,
+            chapter_id=request.chapter_id,
+            script_division=request.script_division,
+            consistency=request.consistency,
+        )
+        if not request.refresh_cache:
+            cached = get_cached_script_extract(cache_key)
+            if cached is not None:
+                return success_response(data=cached, meta={"from_cache": True})
+
         agent = ElementExtractorAgent(llm)
         result = agent.extract(
             project_id=request.project_id,
@@ -540,7 +557,8 @@ async def extract_script(
             script_division_json=json.dumps(request.script_division, ensure_ascii=False),
             consistency_json=json.dumps(request.consistency or {}, ensure_ascii=False),
         )
-        return success_response(data=result)
+        set_cached_script_extract(cache_key, result)
+        return success_response(data=result, meta={"from_cache": False})
     except Exception as e:
         logger.error(f"Script extraction failed: {e}")
         raise HTTPException(

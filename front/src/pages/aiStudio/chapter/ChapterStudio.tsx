@@ -44,7 +44,6 @@ import {
   PauseCircleOutlined,
   PictureOutlined,
   PlayCircleOutlined,
-  ReloadOutlined,
   ScissorOutlined,
   SettingOutlined,
   SoundOutlined,
@@ -61,11 +60,11 @@ import {
 import { useParams, Link } from 'react-router-dom'
 import {
   FilmService,
-  ScriptProcessingService,
   StudioChaptersService,
   StudioEntitiesService,
   StudioFilesService,
   StudioImageTasksService,
+  StudioProjectsService,
   StudioShotCharacterLinksService,
   StudioShotDetailsService,
   StudioShotDialogLinesService,
@@ -85,13 +84,13 @@ import type {
   ShotDetailRead,
   ShotDialogLineRead,
   ShotExtractedCandidateRead,
+  ShotAssetsOverviewRead,
   ShotFrameImageRead,
   ShotCharacterLinkRead,
   ProjectPropLinkRead,
   ShotRead,
   ProjectSceneLinkRead,
   ShotStatus,
-  StudioScriptExtractionDraft,
 } from '../../../services/generated'
 import { listTaskLinksNormalized } from '../../../services/filmTaskLinks'
 import { buildFileDownloadUrl, resolveAssetUrl } from '../assets/utils'
@@ -124,12 +123,6 @@ type StudioShot = ShotRead & {
   hasProblem?: boolean
   hasSpeech?: boolean
   hasMusic?: boolean
-}
-
-type ShotExtractCacheEntry = {
-  signature: string
-  data: StudioScriptExtractionDraft | null
-  fromCache: boolean
 }
 
 type LayoutPrefs = {
@@ -290,11 +283,9 @@ const ChapterStudio: React.FC = () => {
     chapterId?: string
   }>()
   const [chapter, setChapter] = useState<Chapter | null>(null)
+  const [projectVisualStyle, setProjectVisualStyle] = useState<'现实' | '动漫'>('现实')
+  const [projectStyle, setProjectStyle] = useState<string>('真人都市')
   const [shots, setShots] = useState<StudioShot[]>([])
-  const shotExtractCacheRef = useRef<Record<string, ShotExtractCacheEntry>>({})
-  const shotExtractBatchSeqRef = useRef(0)
-  const [shotExtractCacheVersion, setShotExtractCacheVersion] = useState(0)
-  const [shotExtractBatchLoading, setShotExtractBatchLoading] = useState(false)
   const [selectedShotId, setSelectedShotId] = useState<string | null>(null)
   const [selectedShotIds, setSelectedShotIds] = useState<string[]>([])
   const lastSelectedIndexRef = useRef<number>(-1)
@@ -307,6 +298,7 @@ const ChapterStudio: React.FC = () => {
   const [costumeLinks, setCostumeLinks] = useState<ProjectCostumeLinkRead[]>([])
   const [shotCharacterLinks, setShotCharacterLinks] = useState<ShotCharacterLinkRead[]>([])
   const [shotCandidateItems, setShotCandidateItems] = useState<ShotExtractedCandidateRead[]>([])
+  const shotCandidatesRequestSeqRef = useRef(0)
   const [shotDurations, setShotDurations] = useState<Record<string, number>>({})
   const [loadingShots, setLoadingShots] = useState(true)
   const [loadingDetail, setLoadingDetail] = useState(false)
@@ -376,87 +368,6 @@ const ChapterStudio: React.FC = () => {
     setShots((prev) => prev.map((s) => (ids.includes(s.id) ? { ...s, hidden: next.has(s.id) } : s)))
   }
 
-  const prefetchShotExtractCandidatesBatch = useCallback(
-    async (sourceShots: StudioShot[]) => {
-      if (!projectId || !chapterId || sourceShots.length === 0) return
-
-      const pending = sourceShots.filter((shot) => {
-        const signature = JSON.stringify({
-          index: shot.index,
-          title: shot.title ?? '',
-          script_excerpt: shot.script_excerpt ?? '',
-        })
-        const cached = shotExtractCacheRef.current[shot.id]
-        return !cached || cached.signature !== signature
-      })
-
-      if (pending.length === 0) return
-
-      const seq = ++shotExtractBatchSeqRef.current
-      setShotExtractBatchLoading(true)
-      try {
-        const signatureById = new Map(
-          pending.map((shot) => [
-            shot.id,
-            JSON.stringify({
-              index: shot.index,
-              title: shot.title ?? '',
-              script_excerpt: shot.script_excerpt ?? '',
-            }),
-          ]),
-        )
-        const res = await ScriptProcessingService.extractScriptApiV1ScriptProcessingExtractPost({
-          requestBody: {
-            project_id: projectId,
-            chapter_id: chapterId,
-            script_division: {
-              total_shots: pending.length,
-              shots: pending.map((shot) => ({
-                index: shot.index,
-                start_line: 1,
-                end_line: 1,
-                script_excerpt: shot.script_excerpt ?? '',
-                shot_name: shot.title ?? '',
-              })),
-            } as any,
-            consistency: undefined,
-            refresh_cache: false,
-          } as any,
-        })
-        if (seq !== shotExtractBatchSeqRef.current) return
-
-        const data = (res.data ?? null) as StudioScriptExtractionDraft | null
-        const fromCache = Boolean(res.meta?.from_cache)
-        const shotDrafts = data?.shots ?? []
-        pending.forEach((shot) => {
-          const draft = shotDrafts.find((item) => item.index === shot.index) ?? null
-          shotExtractCacheRef.current[shot.id] = {
-            signature: signatureById.get(shot.id) ?? '',
-            fromCache,
-            data: draft
-              ? {
-                  project_id: data?.project_id ?? projectId,
-                  chapter_id: data?.chapter_id ?? chapterId,
-                  script_text: data?.script_text ?? shot.script_excerpt ?? '',
-                  characters: data?.characters ?? [],
-                  scenes: data?.scenes ?? [],
-                  props: data?.props ?? [],
-                  costumes: data?.costumes ?? [],
-                  shots: [draft],
-                }
-              : null,
-          }
-        })
-        setShotExtractCacheVersion((v) => v + 1)
-      } catch {
-        // 批量预取失败不打断工作台，选中具体分镜时仍可按单镜头回退提取
-      } finally {
-        if (seq === shotExtractBatchSeqRef.current) setShotExtractBatchLoading(false)
-      }
-    },
-    [chapterId, projectId],
-  )
-
   const loadShots = async () => {
     if (!chapterId) return
     setLoadingShots(true)
@@ -482,7 +393,6 @@ const ChapterStudio: React.FC = () => {
         }))
 
       setShots(enriched)
-      void prefetchShotExtractCandidatesBatch(enriched)
 
       const selectedExists = selectedShotId ? enriched.some((s) => s.id === selectedShotId) : false
       if (!selectedShotId || !selectedExists) {
@@ -540,13 +450,24 @@ const ChapterStudio: React.FC = () => {
   const loadChapter = async () => {
     if (!chapterId) return
     try {
-      const res = await StudioChaptersService.getChapterApiV1StudioChaptersChapterIdGet({ chapterId })
-      const data = res.data
+      const [chapterRes, projectRes] = await Promise.all([
+        StudioChaptersService.getChapterApiV1StudioChaptersChapterIdGet({ chapterId }),
+        projectId ? StudioProjectsService.getProjectApiV1StudioProjectsProjectIdGet({ projectId }) : Promise.resolve(null),
+      ])
+      const data = chapterRes.data
       if (!data) {
         setChapter(null)
         return
       }
       setChapter(toUIChapter(data))
+      const nextVisualStyle = projectRes?.data?.visual_style
+      const nextStyle = projectRes?.data?.style
+      if (nextVisualStyle === '现实' || nextVisualStyle === '动漫') {
+        setProjectVisualStyle(nextVisualStyle)
+      }
+      if (typeof nextStyle === 'string' && nextStyle.trim()) {
+        setProjectStyle(nextStyle)
+      }
     } catch {
       // 章节信息仅用于标题展示，失败不阻断工作台
       setChapter(null)
@@ -561,6 +482,7 @@ const ChapterStudio: React.FC = () => {
 
   useEffect(() => {
     if (!selectedShotId) {
+      shotCandidatesRequestSeqRef.current += 1
       setShotDetail(null)
       setDialogLines([])
       setFrameImages([])
@@ -573,6 +495,7 @@ const ChapterStudio: React.FC = () => {
       return
     }
     setLoadingDetail(true)
+    const reqSeq = ++shotCandidatesRequestSeqRef.current
     setShotCandidateItems([])
     Promise.all([
       StudioShotDetailsService.getShotDetailApiV1StudioShotDetailsShotIdGet({ shotId: selectedShotId }).then((r: any) => r.data ?? null),
@@ -643,6 +566,7 @@ const ChapterStudio: React.FC = () => {
       }).then((r) => r.data ?? []),
     ])
       .then(([detail, dialogs, frames, scenes, actors, props, costumes, shotCharacters, candidates]) => {
+        if (reqSeq !== shotCandidatesRequestSeqRef.current) return
         setShotDetail(detail)
         lastSavedDetailRef.current = detail
         setDialogLines(dialogs)
@@ -657,8 +581,14 @@ const ChapterStudio: React.FC = () => {
           setShotDurations((prev) => ({ ...prev, [selectedShotId]: detail.duration ?? 0 }))
         }
       })
-      .catch(() => message.error('加载分镜详情失败'))
-      .finally(() => setLoadingDetail(false))
+      .catch(() => {
+        if (reqSeq !== shotCandidatesRequestSeqRef.current) return
+        message.error('加载分镜详情失败')
+      })
+      .finally(() => {
+        if (reqSeq !== shotCandidatesRequestSeqRef.current) return
+        setLoadingDetail(false)
+      })
   }, [selectedShotId])
 
   useEffect(() => {
@@ -2271,11 +2201,10 @@ const ChapterStudio: React.FC = () => {
               }}
             >
               <Inspector
-                projectId={projectId}
+                    projectId={projectId}
                 chapterId={chapterId}
-                shotExtractCacheRef={shotExtractCacheRef}
-                shotExtractCacheVersion={shotExtractCacheVersion}
-                shotExtractBatchLoading={shotExtractBatchLoading}
+                projectVisualStyle={projectVisualStyle}
+                projectStyle={projectStyle}
                 loadingDetail={loadingDetail}
                 shotDetail={shotDetail}
                 dialogLines={dialogLines}
@@ -2344,9 +2273,8 @@ const ChapterStudio: React.FC = () => {
                   <Inspector
                     projectId={projectId}
                     chapterId={chapterId}
-                    shotExtractCacheRef={shotExtractCacheRef}
-                    shotExtractCacheVersion={shotExtractCacheVersion}
-                    shotExtractBatchLoading={shotExtractBatchLoading}
+                    projectVisualStyle={projectVisualStyle}
+                    projectStyle={projectStyle}
                     loadingDetail={loadingDetail}
                     shotDetail={shotDetail}
                     dialogLines={dialogLines}
@@ -2402,9 +2330,8 @@ export default ChapterStudio
 function Inspector(props: {
   projectId?: string
   chapterId?: string
-  shotExtractCacheRef: React.MutableRefObject<Record<string, ShotExtractCacheEntry>>
-  shotExtractCacheVersion: number
-  shotExtractBatchLoading: boolean
+  projectVisualStyle: '现实' | '动漫'
+  projectStyle: string
   loadingDetail: boolean
   shotDetail: ShotDetailRead | null
   dialogLines: ShotDialogLineRead[]
@@ -2438,9 +2365,8 @@ function Inspector(props: {
   const {
     projectId,
     chapterId,
-    shotExtractCacheRef,
-    shotExtractCacheVersion,
-    shotExtractBatchLoading,
+    projectVisualStyle,
+    projectStyle,
     loadingDetail,
     shotDetail,
     dialogLines,
@@ -2491,12 +2417,11 @@ function Inspector(props: {
   const [shotLinkedAssets, setShotLinkedAssets] = useState<
     Array<{ type: string; id: string; name?: string; thumbnail?: string; image_id?: number | null }>
   >([])
-  const [shotExtractCandidates, setShotExtractCandidates] = useState<StudioScriptExtractionDraft | null>(null)
-  const [shotExtractOwnerId, setShotExtractOwnerId] = useState<string | null>(null)
-  const [shotExtractCandidatesLoading, setShotExtractCandidatesLoading] = useState(false)
+  const [shotAssetsOverview, setShotAssetsOverview] = useState<ShotAssetsOverviewRead | null>(null)
+  const shotAssetsOverviewRequestSeqRef = useRef(0)
   const [shotRenderPromptLoading, setShotRenderPromptLoading] = useState(false)
   const [shotExtractStatus, setShotExtractStatus] = useState<{
-    source: 'idle' | 'fresh' | 'cache' | 'failed'
+    source: 'idle'
     updatedAt: number | null
     message: string
   }>({
@@ -2727,128 +2652,44 @@ function Inspector(props: {
     }
   }, [selectedShot?.id])
 
-  const extractShotAssetsForReadiness = useCallback(
-    async (force = false) => {
-      if (!projectId || !currentChapterId || !selectedShot?.id) {
-        setShotExtractCandidates(null)
-        setShotExtractOwnerId(null)
-        setShotExtractCandidatesLoading(false)
-        return
-      }
-      const shotId = selectedShot.id
-      const signature = JSON.stringify({
-        index: selectedShot.index,
-        title: selectedShot.title ?? '',
-        script_excerpt: selectedShot.script_excerpt ?? '',
-      })
-      const cached = shotExtractCacheRef.current[shotId]
-      if (!force && cached && cached.signature === signature) {
-        setShotExtractCandidates(cached.data)
-        setShotExtractOwnerId(shotId)
-        setShotExtractStatus({
-          source: cached.fromCache ? 'cache' : 'fresh',
-          updatedAt: Date.now(),
-          message: cached.fromCache ? '当前显示的是缓存的提取结果' : '当前显示的是已预取的最新提取结果',
-        })
-        return
-      }
-
-      setShotExtractCandidatesLoading(true)
+  const loadShotAssetsOverview = useCallback(
+    async (shotId: string) => {
+      const reqSeq = ++shotAssetsOverviewRequestSeqRef.current
       try {
-        const scriptDivision = {
-          total_shots: 1,
-          shots: [
-            {
-              index: selectedShot.index,
-              start_line: 1,
-              end_line: 1,
-              script_excerpt: selectedShot.script_excerpt ?? '',
-              shot_name: selectedShot.title ?? '',
-            },
-          ],
-        }
-        const res = await ScriptProcessingService.extractScriptApiV1ScriptProcessingExtractPost({
-          requestBody: {
-            project_id: projectId,
-            chapter_id: currentChapterId,
-            script_division: scriptDivision as any,
-            consistency: undefined,
-            refresh_cache: force,
-          } as any,
+        const res = await StudioShotsService.getShotAssetsOverviewApiApiV1StudioShotsShotIdAssetsOverviewGet({
+          shotId,
         })
-        const data = (res.data ?? null) as StudioScriptExtractionDraft | null
-        const fromCache = Boolean(res.meta?.from_cache)
-        shotExtractCacheRef.current[shotId] = { signature, data, fromCache }
-        setShotExtractCandidates(data)
-        setShotExtractOwnerId(shotId)
-        setShotExtractStatus({
-          source: fromCache ? 'cache' : 'fresh',
-          updatedAt: Date.now(),
-          message: fromCache ? '当前显示的是缓存的提取结果' : '已完成最新一轮提取',
-        })
-        await onLoadShotCandidateItems(shotId)
+        if (reqSeq !== shotAssetsOverviewRequestSeqRef.current) return
+        setShotAssetsOverview(res.data ?? null)
       } catch {
-        setShotExtractCandidates(null)
-        setShotExtractOwnerId(shotId)
-        setShotExtractStatus({
-          source: 'failed',
-          updatedAt: Date.now(),
-          message: '提取失败，当前没有可用结果',
-        })
-      } finally {
-        setShotExtractCandidatesLoading(false)
+        if (reqSeq !== shotAssetsOverviewRequestSeqRef.current) return
+        setShotAssetsOverview(null)
       }
     },
-    [currentChapterId, onLoadShotCandidateItems, projectId, selectedShot?.id, selectedShot?.index, selectedShot?.script_excerpt, selectedShot?.title],
+    [],
   )
 
   useEffect(() => {
     if (!selectedShot?.id) {
-      setShotExtractCandidates(null)
-      setShotExtractOwnerId(null)
-      setShotExtractCandidatesLoading(false)
+      shotAssetsOverviewRequestSeqRef.current += 1
+      setShotAssetsOverview(null)
       return
     }
-    const shotId = selectedShot.id
-    const signature = JSON.stringify({
-      index: selectedShot.index,
-      title: selectedShot.title ?? '',
-      script_excerpt: selectedShot.script_excerpt ?? '',
+    void loadShotAssetsOverview(selectedShot.id)
+  }, [loadShotAssetsOverview, selectedShot?.id, shotCandidateItems])
+
+  useEffect(() => {
+    if (!selectedShot?.id) {
+      setShotExtractStatus({ source: 'idle', updatedAt: null, message: '' })
+      return
+    }
+    setShotExtractStatus({
+      source: 'idle',
+      updatedAt: null,
+      message: '待确认候选请前往分镜编辑页提取或刷新。',
     })
-    const cached = shotExtractCacheRef.current[shotId]
-
-    if (cached && cached.signature === signature) {
-      setShotExtractCandidates(cached.data)
-      setShotExtractOwnerId(shotId)
-      setShotExtractCandidatesLoading(false)
-      setShotExtractStatus({
-        source: cached.fromCache ? 'cache' : 'fresh',
-        updatedAt: Date.now(),
-        message: cached.fromCache ? '当前显示的是缓存的提取结果' : '当前显示的是已预取的最新提取结果',
-      })
-      return
-    }
-
-    if (shotExtractBatchLoading) {
-      setShotExtractCandidatesLoading(true)
-      setShotExtractStatus({
-        source: 'idle',
-        updatedAt: null,
-        message: '正在批量提取本章分镜候选资产…',
-      })
-      return
-    }
-
-    void extractShotAssetsForReadiness()
   }, [
-    extractShotAssetsForReadiness,
     selectedShot?.id,
-    selectedShot?.index,
-    selectedShot?.script_excerpt,
-    selectedShot?.title,
-    shotExtractBatchLoading,
-    shotExtractCacheRef,
-    shotExtractCacheVersion,
   ])
 
   const linkedAssetThumbByKey = useMemo(() => {
@@ -2859,13 +2700,6 @@ function Inspector(props: {
     })
     return map
   }, [shotLinkedAssets])
-
-  const extractedShotDraft = useMemo(() => {
-    if (!selectedShot?.id || shotExtractOwnerId !== selectedShot.id) return null
-    const shots = shotExtractCandidates?.shots ?? []
-    if (shots.length === 0) return null
-    return shots.find((x) => x.index === selectedShot?.index) ?? shots[0]
-  }, [selectedShot?.id, selectedShot?.index, shotExtractCandidates?.shots, shotExtractOwnerId])
 
   const promptAssetReadiness = useMemo(() => {
     if (selectedShot?.skip_extraction) {
@@ -2900,8 +2734,9 @@ function Inspector(props: {
         hasMissing: false,
       }
     }
-    const bucket = (type: ShotExtractedCandidateRead['candidate_type']) =>
-      shotCandidateItems.filter((item) => item.candidate_type === type)
+    const overviewItems = shotAssetsOverview?.items ?? []
+    const bucket = (type: 'character' | 'scene' | 'prop' | 'costume') =>
+      overviewItems.filter((item) => item.type === type)
 
     const checks = [
       {
@@ -2930,9 +2765,9 @@ function Inspector(props: {
       },
     ].map((item) => {
       const entries = item.candidates.map((candidate) => ({
-        id: candidate.id,
-        name: candidate.candidate_name,
-        status: candidate.candidate_status,
+        id: candidate.candidate_id ?? -1,
+        name: candidate.name,
+        status: candidate.candidate_status ?? (candidate.is_linked ? 'linked' : 'pending'),
       }))
       const pending = entries.filter((entry) => entry.status === 'pending')
       const linked = entries.filter((entry) => entry.status === 'linked')
@@ -2959,7 +2794,7 @@ function Inspector(props: {
       percent: expectedChecks.length === 0 ? 100 : Math.round((readyCount / expectedChecks.length) * 100),
       hasMissing: expectedChecks.some((item) => item.missing.length > 0),
     }
-  }, [selectedShot?.skip_extraction, shotCandidateItems])
+  }, [selectedShot?.skip_extraction, shotAssetsOverview?.items])
 
   useEffect(() => {
     if (!projectId || !selectedShot?.id) {
@@ -2967,25 +2802,18 @@ function Inspector(props: {
       return
     }
 
+    const overviewItems = shotAssetsOverview?.items ?? []
     const characterNames = uniqueNames(
-      shotCandidateItems
-        .filter((item) => item.candidate_type === 'character' && item.candidate_status === 'pending')
-        .map((item) => item.candidate_name),
+      overviewItems.filter((item) => item.type === 'character' && item.candidate_status === 'pending').map((item) => item.name),
     )
     const sceneNames = uniqueNames(
-      shotCandidateItems
-        .filter((item) => item.candidate_type === 'scene' && item.candidate_status === 'pending')
-        .map((item) => item.candidate_name),
+      overviewItems.filter((item) => item.type === 'scene' && item.candidate_status === 'pending').map((item) => item.name),
     )
     const propNames = uniqueNames(
-      shotCandidateItems
-        .filter((item) => item.candidate_type === 'prop' && item.candidate_status === 'pending')
-        .map((item) => item.candidate_name),
+      overviewItems.filter((item) => item.type === 'prop' && item.candidate_status === 'pending').map((item) => item.name),
     )
     const costumeNames = uniqueNames(
-      shotCandidateItems
-        .filter((item) => item.candidate_type === 'costume' && item.candidate_status === 'pending')
-        .map((item) => item.candidate_name),
+      overviewItems.filter((item) => item.type === 'costume' && item.candidate_status === 'pending').map((item) => item.name),
     )
 
     if (characterNames.length === 0 && sceneNames.length === 0 && propNames.length === 0 && costumeNames.length === 0) {
@@ -3036,7 +2864,7 @@ function Inspector(props: {
   }, [
     projectId,
     selectedShot?.id,
-    shotCandidateItems,
+    shotAssetsOverview?.items,
   ])
 
   const getReadinessExistenceLabel = useCallback((checkKey: 'characters' | 'scene' | 'props' | 'costumes', name: string) => {
@@ -3055,12 +2883,11 @@ function Inspector(props: {
   const promptAssetReadinessNote = useMemo(() => {
     if (!selectedShot) return '请先选择一个分镜。'
     if (selectedShot.skip_extraction) return '当前分镜已明确标记为无需提取，系统会直接按“提取确认已完成”处理。'
-    if (!shotExtractCandidates) return '当前还没有拿到这条分镜的剧本提取结果，暂时无法展示候选确认状态。'
-    return '这里优先依据后端 extracted-candidates 的正式状态，展示提取候选是否已关联、已忽略，或仍待处理。'
-  }, [selectedShot, shotExtractCandidates])
+    if (!shotAssetsOverview) return '当前还没有拿到这条分镜的资产总览，暂时无法展示候选确认状态。'
+    return '这里优先依据后端 assets-overview 的统一结果，展示已关联资产与待确认候选的并集状态；提取与刷新统一在分镜编辑页处理。'
+  }, [selectedShot, shotAssetsOverview])
 
   const shotExtractStatusText = useMemo(() => {
-    if (shotExtractCandidatesLoading) return '正在提取当前分镜的候选资产…'
     if (!shotExtractStatus.message) return ''
     if (!shotExtractStatus.updatedAt) return shotExtractStatus.message
     const time = new Date(shotExtractStatus.updatedAt).toLocaleTimeString('zh-CN', {
@@ -3069,7 +2896,12 @@ function Inspector(props: {
       second: '2-digit',
     })
     return `${shotExtractStatus.message} · ${time}`
-  }, [shotExtractCandidatesLoading, shotExtractStatus])
+  }, [shotExtractStatus])
+
+  const goToShotEditForAssets = useCallback(() => {
+    if (!projectId || !currentChapterId || !selectedShot?.id) return
+    window.location.assign(`/projects/${projectId}/chapters/${currentChapterId}/shots/${selectedShot.id}/edit`)
+  }, [currentChapterId, projectId, selectedShot?.id])
 
   const extractFileIdFromThumbnail = useCallback((thumbnail?: string | null): string | null => {
     const v = (thumbnail || '').trim()
@@ -3328,7 +3160,14 @@ function Inspector(props: {
   const openReadinessCreate = useCallback((kind: 'characters' | 'scene' | 'props' | 'costumes', name: string) => {
     if (!projectId || !selectedShot?.id) return
     const currentShotId = selectedShot.id
-    const ctxQ = `&projectId=${encodeURIComponent(projectId)}&chapterId=${encodeURIComponent(currentChapterId ?? '')}&shotId=${encodeURIComponent(currentShotId)}`
+    const styleQ =
+      `&visualStyle=${encodeURIComponent(projectVisualStyle)}` +
+      `&style=${encodeURIComponent(projectStyle)}`
+    const ctxQ =
+      `&projectId=${encodeURIComponent(projectId)}` +
+      `&chapterId=${encodeURIComponent(currentChapterId ?? '')}` +
+      `&shotId=${encodeURIComponent(currentShotId)}` +
+      styleQ
     const open = (url: string) => window.open(url, '_blank', 'noopener,noreferrer')
     if (kind === 'characters') {
       open(`/projects/${encodeURIComponent(projectId)}?tab=roles&create=1&name=${encodeURIComponent(name)}${ctxQ}`)
@@ -3336,7 +3175,7 @@ function Inspector(props: {
     }
     const tab = kind === 'scene' ? 'scene' : kind === 'props' ? 'prop' : 'costume'
     open(`/assets?tab=${tab}&create=1&name=${encodeURIComponent(name)}${ctxQ}`)
-  }, [currentChapterId, projectId, selectedShot?.id])
+  }, [currentChapterId, projectId, projectStyle, projectVisualStyle, selectedShot?.id])
 
   const handleReadinessMissingAction = useCallback(async (kind: 'characters' | 'scene' | 'props' | 'costumes', name: string) => {
     const item = readinessExistenceMap[`${kind}:${normalizeAssetName(name)}`]
@@ -3362,13 +3201,14 @@ function Inspector(props: {
         onPatchShotList(selectedShot.id, { skip_extraction: nextSkip })
       }
       await onLoadShotCandidateItems(selectedShot.id)
+      await loadShotAssetsOverview(selectedShot.id)
       message.success(nextSkip ? '已标记为无需提取' : '已恢复提取确认流程')
     } catch {
       message.error(nextSkip ? '标记无需提取失败' : '恢复提取失败')
     } finally {
       setSkipExtractionUpdating(false)
     }
-  }, [onLoadShotCandidateItems, onPatchShotList, selectedShot?.id, selectedShot?.skip_extraction])
+  }, [loadShotAssetsOverview, onLoadShotCandidateItems, onPatchShotList, selectedShot?.id, selectedShot?.skip_extraction])
 
   const ignoreReadinessCandidate = useCallback(
     async (candidateId: number) => {
@@ -3380,6 +3220,7 @@ function Inspector(props: {
           candidateId,
         })
         await onLoadShotCandidateItems(selectedShot.id)
+        await loadShotAssetsOverview(selectedShot.id)
         message.success('已忽略该候选项')
       } catch {
         message.error('忽略候选项失败')
@@ -3387,7 +3228,7 @@ function Inspector(props: {
         setReadinessCandidateActionIds((prev) => ({ ...prev, [candidateId]: false }))
       }
     },
-    [onLoadShotCandidateItems, readinessCandidateActionIds, selectedShot?.id],
+    [loadShotAssetsOverview, onLoadShotCandidateItems, readinessCandidateActionIds, selectedShot?.id],
   )
 
   useEffect(() => {
@@ -4069,13 +3910,13 @@ function Inspector(props: {
                     {shotExtractStatusText ? (
                       <div className={`cs-readiness-status is-${shotExtractStatus.source}`}>
                         <span>{shotExtractStatusText}</span>
-                        <Tooltip title="重新提取当前分镜">
+                        <Tooltip title="前往分镜编辑页处理提取与确认">
                           <Button
                             type="text"
                             size="small"
                             className="cs-readiness-status__refresh"
-                            icon={<ReloadOutlined spin={shotExtractCandidatesLoading} />}
-                            onClick={() => void extractShotAssetsForReadiness(true)}
+                            icon={<EditOutlined />}
+                            onClick={goToShotEditForAssets}
                           />
                         </Tooltip>
                       </div>
@@ -4092,14 +3933,10 @@ function Inspector(props: {
                           </div>
                         </div>
                       </div>
-                    ) : !extractedShotDraft && shotExtractCandidatesLoading ? (
-                      <div className="py-4 text-center">
-                        <Spin size="small" />
-                      </div>
-                    ) : !extractedShotDraft ? (
-                      <div className="text-xs text-gray-400 mt-3">当前分镜还没有提取到可用的候选资产。</div>
+                    ) : !shotAssetsOverview ? (
+                      <div className="text-xs text-gray-400 mt-3">当前分镜还没有可用的资产总览数据，请前往分镜编辑页处理提取与确认。</div>
                     ) : (
-                      <div className={`space-y-4 mt-3 ${shotExtractCandidatesLoading ? 'cs-readiness-content is-refreshing' : ''}`}>
+                      <div className="space-y-4 mt-3">
                         <div className="cs-readiness-summary">
                           <div>
                             <div className="cs-readiness-summary__title">
@@ -4117,6 +3954,12 @@ function Inspector(props: {
                               strokeColor={promptAssetReadiness.hasMissing ? '#f59e0b' : '#10b981'}
                             />
                           </div>
+                        </div>
+
+                        <div>
+                          <Button type="primary" icon={<EditOutlined />} onClick={goToShotEditForAssets}>
+                            去分镜编辑确认
+                          </Button>
                         </div>
 
                         <div className="cs-readiness-grid">

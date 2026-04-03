@@ -36,8 +36,10 @@ from app.services.studio.shot_assets import (
     create_project_asset_link,
     delete_project_asset_link,
     list_project_asset_links_paginated,
+    list_shot_linked_assets,
     list_shot_linked_assets_paginated,
 )
+from app.services.studio.shot_assets_overview import get_shot_assets_overview
 from app.services.studio.shots import (
     create as create_shot,
     delete as delete_shot,
@@ -123,11 +125,13 @@ __all__ = [
     "list_entities_paginated",
     "list_project_asset_links_paginated",
     "list_shot_character_links",
+    "list_shot_linked_assets",
     "list_shot_details_paginated",
     "list_shot_dialog_lines_paginated",
     "list_shot_frame_images_paginated",
     "list_shot_extracted_candidates",
     "list_shot_linked_assets_paginated",
+    "get_shot_assets_overview",
     "list_shots_paginated",
     "link_shot_extracted_candidate",
     "link_shot_extracted_candidate_by_name",

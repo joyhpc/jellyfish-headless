@@ -1,4 +1,4 @@
-import { useState, useEffect, type ReactNode } from 'react'
+import { useState, useEffect } from 'react'
 import { Card, Button, Tag, Space, Table, Empty, Modal, Input, Dropdown, message } from 'antd'
 import type { MenuProps, TableColumnsType } from 'antd'
 import {
@@ -7,7 +7,6 @@ import {
   MoreOutlined,
   PlusOutlined,
   ScissorOutlined,
-  VideoCameraOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { StudioChaptersService } from '../../../../../services/generated'
@@ -16,61 +15,11 @@ import { getChapterShotsPath, getChapterStudioPath } from '../routes'
 import { useChapters, newId, type Chapter } from '../hooks/useProjectData'
 import { ChapterRawTextEditorModal } from '../../../chapter/components/ChapterRawTextEditorModal'
 import { ensureHasShotsBeforeShooting } from '../ensureHasShotsBeforeShooting'
+import { getChapterPreparationState } from '../chapterPreparation'
 
 const { TextArea } = Input
 const CREATE_PARAM = 'create'
-
-type ChapterPreparationState = {
-  key: 'edit_raw' | 'extract_shots' | 'prepare_shots' | 'shoot'
-  text: string
-  color: string
-  hint: string
-  primaryAction: string
-  primaryIcon: ReactNode
-}
-
-function getChapterPreparationState(chapter: Chapter): ChapterPreparationState {
-  const hasRawText = !!chapter.rawText?.trim()
-  const hasShots = (chapter.storyboardCount ?? 0) > 0
-  if (!hasRawText) {
-    return {
-      key: 'edit_raw',
-      text: '待录入原文',
-      color: 'default',
-      hint: '先补章节原文，再进入分镜流程',
-      primaryAction: '编辑原文',
-      primaryIcon: <EditOutlined />,
-    }
-  }
-  if (!hasShots) {
-    return {
-      key: 'extract_shots',
-      text: '待提取分镜',
-      color: 'gold',
-      hint: '已有章节原文，下一步建议先提取分镜',
-      primaryAction: '提取分镜',
-      primaryIcon: <ScissorOutlined />,
-    }
-  }
-  if (chapter.status === 'shooting' || chapter.status === 'done') {
-    return {
-      key: 'shoot',
-      text: '可进入拍摄',
-      color: 'green',
-      hint: '当前章节已具备分镜，可继续进入拍摄',
-      primaryAction: '进入拍摄',
-      primaryIcon: <VideoCameraOutlined />,
-    }
-  }
-  return {
-    key: 'prepare_shots',
-    text: '待准备镜头',
-    color: 'blue',
-    hint: '已有分镜，建议先进入分镜工作室补齐镜头准备',
-    primaryAction: '进入分镜工作室',
-    primaryIcon: <FileSearchOutlined />,
-  }
-}
+const EDIT_PARAM = 'edit'
 
 export function ChaptersTab() {
   const navigate = useNavigate()
@@ -85,6 +34,7 @@ export function ChaptersTab() {
   const [createContent, setCreateContent] = useState('')
 
   const createParam = searchParams.get(CREATE_PARAM)
+  const editParam = searchParams.get(EDIT_PARAM)
   useEffect(() => {
     if (createParam === '1') {
       setCreateOpen(true)
@@ -98,6 +48,21 @@ export function ChaptersTab() {
       )
     }
   }, [createParam, setSearchParams])
+
+  useEffect(() => {
+    if (!editParam) return
+    const target = chapters.find((chapter) => chapter.id === editParam)
+    if (!target) return
+    openEditModal(target)
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev)
+        next.delete(EDIT_PARAM)
+        return next
+      },
+      { replace: true }
+    )
+  }, [chapters, editParam, setSearchParams])
 
   const openEditModal = (chapter: Chapter) => {
     setEditingChapter(chapter)

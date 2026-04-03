@@ -3,20 +3,19 @@ import { Button, Card, Divider, Empty, Input, Layout, List, Modal, Popconfirm, S
 import { ArrowLeftOutlined, DeleteOutlined, FireOutlined, PlusOutlined, SaveOutlined, SmileOutlined } from '@ant-design/icons'
 import type {
   EntityNameExistenceItem,
+  ShotAssetOverviewItem,
+  ShotAssetsOverviewRead,
   ShotDialogLineCreate,
   ShotDialogLineRead,
-  ShotExtractedCandidateRead,
   ShotDialogLineUpdate,
   ShotRead,
-  StudioAssetDraft,
-  StudioCharacterDraft,
-  StudioScriptExtractionDraft,
   StudioShotDraftDialogueLine,
 } from '../../../services/generated'
 import {
   ScriptProcessingService,
   StudioChaptersService,
   StudioEntitiesService,
+  StudioProjectsService,
   StudioShotDialogLinesService,
   StudioShotsService,
   StudioShotCharacterLinksService,
@@ -36,7 +35,7 @@ type AssetVM = NamedDraft & {
   kind: AssetKind
   status: 'linked' | 'new'
   candidateId?: number
-  candidateStatus?: ShotExtractedCandidateRead['candidate_status']
+  candidateStatus?: ShotAssetOverviewItem['candidate_status']
 }
 type ExtractedDialogLineVM = StudioShotDraftDialogueLine & { __key: string }
 
@@ -54,24 +53,7 @@ function assetDetailUrl(kind: AssetKind, id: string, projectId: string) {
   return `/projects/${encodeURIComponent(projectId)}/roles/${encodeURIComponent(id)}/edit`
 }
 
-function normalizeName(name: string) {
-  return name.trim()
-}
-
-function uniqByName<T extends { name: string }>(items: T[]) {
-  const seen = new Set<string>()
-  const out: T[] = []
-  for (const it of items) {
-    const key = normalizeName(it.name)
-    if (!key) continue
-    if (seen.has(key)) continue
-    seen.add(key)
-    out.push({ ...it, name: key })
-  }
-  return out
-}
-
-function candidateKindToAssetKind(kind: ShotExtractedCandidateRead['candidate_type']): AssetKind {
+function overviewTypeToAssetKind(kind: ShotAssetOverviewItem['type']): AssetKind {
   return kind === 'character' ? 'actor' : kind
 }
 
@@ -85,22 +67,19 @@ export function ChapterShotEditPage() {
 
   const [chapterTitle, setChapterTitle] = useState('')
   const [chapterIndex, setChapterIndex] = useState<number | null>(null)
+  const [projectVisualStyle, setProjectVisualStyle] = useState<'现实' | '动漫'>('现实')
+  const [projectStyle, setProjectStyle] = useState<string>('真人都市')
   const [shots, setShots] = useState<ShotRead[]>([])
   const [shot, setShot] = useState<ShotRead | null>(null)
   const [title, setTitle] = useState('')
   const [scriptExcerpt, setScriptExcerpt] = useState('')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [extractionDraft, setExtractionDraft] = useState<StudioScriptExtractionDraft | null>(null)
-  const [extractedAux, setExtractedAux] = useState<StudioScriptExtractionDraft | null>(null)
-  const [shotCandidates, setShotCandidates] = useState<ShotExtractedCandidateRead[]>([])
+  const [shotAssetsOverview, setShotAssetsOverview] = useState<ShotAssetsOverviewRead | null>(null)
+  const assetsOverviewRequestSeqRef = useRef(0)
   const [extractingAssets, setExtractingAssets] = useState(false)
   const [skipExtractionUpdating, setSkipExtractionUpdating] = useState(false)
   const extractInFlightRef = useRef(false)
-
-  const pollTimerRef = useRef<number | null>(null)
-  const pollInFlightRef = useRef(false)
-  const [pollEnabled, setPollEnabled] = useState(false)
 
   const [linkingOpen, setLinkingOpen] = useState(false)
   const [linkingLoading, setLinkingLoading] = useState(false)
@@ -139,74 +118,30 @@ export function ChapterShotEditPage() {
     [shots],
   )
 
-  const linkedFromDraft = useMemo(() => {
-    const characters = (extractionDraft?.characters ?? []) as StudioCharacterDraft[]
-    const scenes = (extractionDraft?.scenes ?? []) as StudioAssetDraft[]
-    const props = (extractionDraft?.props ?? []) as StudioAssetDraft[]
-    const costumes = (extractionDraft?.costumes ?? []) as StudioAssetDraft[]
-    return {
-      actor: uniqByName(characters.map((c) => ({ name: c.name, thumbnail: c.thumbnail ?? null, id: c.id ?? null, file_id: c.file_id ?? null, description: c.description ?? null }))),
-      scene: uniqByName(scenes.map((s) => ({ name: s.name, thumbnail: s.thumbnail ?? null, id: s.id ?? null, file_id: s.file_id ?? null, description: s.description ?? null }))),
-      prop: uniqByName(props.map((p) => ({ name: p.name, thumbnail: p.thumbnail ?? null, id: p.id ?? null, file_id: p.file_id ?? null, description: p.description ?? null }))),
-      costume: uniqByName(costumes.map((c) => ({ name: c.name, thumbnail: c.thumbnail ?? null, id: c.id ?? null, file_id: c.file_id ?? null, description: c.description ?? null }))),
-    }
-  }, [extractionDraft])
-
-  const auxFromExtract = useMemo(() => {
-    const characters = (extractedAux?.characters ?? []) as StudioCharacterDraft[]
-    const scenes = (extractedAux?.scenes ?? []) as StudioAssetDraft[]
-    const props = (extractedAux?.props ?? []) as StudioAssetDraft[]
-    const costumes = (extractedAux?.costumes ?? []) as StudioAssetDraft[]
-    return {
-      actor: uniqByName(characters.map((c) => ({ name: c.name, thumbnail: c.thumbnail ?? null, id: c.id ?? null, file_id: c.file_id ?? null, description: c.description ?? null }))),
-      scene: uniqByName(scenes.map((s) => ({ name: s.name, thumbnail: s.thumbnail ?? null, id: s.id ?? null, file_id: s.file_id ?? null, description: s.description ?? null }))),
-      prop: uniqByName(props.map((p) => ({ name: p.name, thumbnail: p.thumbnail ?? null, id: p.id ?? null, file_id: p.file_id ?? null, description: p.description ?? null }))),
-      costume: uniqByName(costumes.map((c) => ({ name: c.name, thumbnail: c.thumbnail ?? null, id: c.id ?? null, file_id: c.file_id ?? null, description: c.description ?? null }))),
-    }
-  }, [extractedAux])
-
-  const candidateMaps = useMemo(() => {
-    const maps: Record<AssetKind, Record<string, ShotExtractedCandidateRead>> = {
-      scene: {},
-      actor: {},
-      prop: {},
-      costume: {},
-    }
-    for (const candidate of shotCandidates) {
-      const kind = candidateKindToAssetKind(candidate.candidate_type)
-      const key = normalizeName(candidate.candidate_name)
-      if (!key) continue
-      maps[kind][key] = candidate
-    }
-    return maps
-  }, [shotCandidates])
-
   const unionAssets = useMemo(() => {
-    const mergeAssets = (kind: AssetKind, linked: NamedDraft[], aux: NamedDraft[]) => {
-      const linkedMap = new Set(linked.map((x) => normalizeName(x.name)).filter(Boolean))
-      return uniqByName([...linked, ...aux])
-        .map((item) => {
-          const key = normalizeName(item.name)
-          const candidate = candidateMaps[kind][key]
-          if (candidate?.candidate_status === 'ignored') return null
-          const isLinked = linkedMap.has(key) || candidate?.candidate_status === 'linked'
-          return {
-            ...item,
-            kind,
-            status: isLinked ? 'linked' : 'new',
-            candidateId: candidate?.id,
-            candidateStatus: candidate?.candidate_status,
-          } satisfies AssetVM
-        })
-        .filter(Boolean) as AssetVM[]
+    const groups: Record<AssetKind, AssetVM[]> = {
+      scene: [],
+      actor: [],
+      prop: [],
+      costume: [],
     }
-    return {
-      scene: mergeAssets('scene', linkedFromDraft.scene, auxFromExtract.scene),
-      actor: mergeAssets('actor', linkedFromDraft.actor, auxFromExtract.actor),
-      prop: mergeAssets('prop', linkedFromDraft.prop, auxFromExtract.prop),
-      costume: mergeAssets('costume', linkedFromDraft.costume, auxFromExtract.costume),
+    for (const item of shotAssetsOverview?.items ?? []) {
+      if (item.candidate_status === 'ignored') continue
+      const kind = overviewTypeToAssetKind(item.type)
+      groups[kind].push({
+        kind,
+        name: item.name,
+        thumbnail: item.thumbnail ?? null,
+        id: item.linked_entity_id ?? null,
+        file_id: item.file_id ?? null,
+        description: item.description ?? null,
+        status: item.is_linked ? 'linked' : 'new',
+        candidateId: item.candidate_id ?? undefined,
+        candidateStatus: item.candidate_status ?? undefined,
+      })
     }
-  }, [auxFromExtract, candidateMaps, linkedFromDraft])
+    return groups
+  }, [shotAssetsOverview])
 
   const [expandedKinds, setExpandedKinds] = useState<Record<AssetKind, boolean>>({
     scene: false,
@@ -223,7 +158,8 @@ export function ChapterShotEditPage() {
     if (!chapterId || !shotId || !projectId) return
     setLoading(true)
     try {
-      const [chRes, listRes, shotRes] = await Promise.all([
+      const [projectRes, chRes, listRes, shotRes] = await Promise.all([
+        StudioProjectsService.getProjectApiV1StudioProjectsProjectIdGet({ projectId }),
         StudioChaptersService.getChapterApiV1StudioChaptersChapterIdGet({ chapterId }),
         StudioShotsService.listShotsApiV1StudioShotsGet({
           chapterId,
@@ -234,6 +170,14 @@ export function ChapterShotEditPage() {
         }),
         StudioShotsService.getShotApiV1StudioShotsShotIdGet({ shotId }),
       ])
+      const nextVisualStyle = projectRes.data?.visual_style
+      const nextStyle = projectRes.data?.style
+      if (nextVisualStyle === '现实' || nextVisualStyle === '动漫') {
+        setProjectVisualStyle(nextVisualStyle)
+      }
+      if (typeof nextStyle === 'string' && nextStyle.trim()) {
+        setProjectStyle(nextStyle)
+      }
 
       const c = chRes.data
       setChapterTitle(c?.title ?? '')
@@ -257,10 +201,7 @@ export function ChapterShotEditPage() {
       setShot(s)
       setTitle(s.title ?? '')
       setScriptExcerpt(s.script_excerpt ?? '')
-      setExtractionDraft(null)
-      setExtractedAux(null)
-      setShotCandidates([])
-      setPollEnabled(false)
+      setShotAssetsOverview(null)
       setSavedDialogLines([])
       setExtractedDialogLines([])
     } catch {
@@ -278,15 +219,18 @@ export function ChapterShotEditPage() {
     dialogDebounceTimersRef.current.clear()
   }, [])
 
-  const loadShotCandidates = useCallback(async () => {
+  const loadAssetsOverview = useCallback(async () => {
     if (!shotId) return
+    const reqSeq = ++assetsOverviewRequestSeqRef.current
     try {
-      const res = await StudioShotsService.getShotExtractedCandidatesApiV1StudioShotsShotIdExtractedCandidatesGet({
+      const res = await StudioShotsService.getShotAssetsOverviewApiApiV1StudioShotsShotIdAssetsOverviewGet({
         shotId,
       })
-      setShotCandidates(res.data ?? [])
+      if (reqSeq !== assetsOverviewRequestSeqRef.current) return
+      setShotAssetsOverview(res.data ?? null)
     } catch {
-      setShotCandidates([])
+      if (reqSeq !== assetsOverviewRequestSeqRef.current) return
+      setShotAssetsOverview(null)
     }
   }, [shotId])
 
@@ -462,8 +406,8 @@ export function ChapterShotEditPage() {
   }, [loadPage])
 
   useEffect(() => {
-    void loadShotCandidates()
-  }, [loadShotCandidates])
+    void loadAssetsOverview()
+  }, [loadAssetsOverview])
 
   // 切换分镜时：清理对白防抖并拉取对白列表
   useEffect(() => {
@@ -518,7 +462,7 @@ export function ChapterShotEditPage() {
           setShot((prev) => (prev ? { ...prev, skip_extraction: skip } : prev))
           setShots((prev) => prev.map((item) => (item.id === shotId ? { ...item, skip_extraction: skip } : item)))
         }
-        await loadShotCandidates()
+        await loadAssetsOverview()
         message.success(skip ? '已标记为无需提取' : '已恢复提取确认流程')
       } catch {
         message.error(skip ? '标记无需提取失败' : '恢复提取失败')
@@ -526,7 +470,7 @@ export function ChapterShotEditPage() {
         setSkipExtractionUpdating(false)
       }
     },
-    [loadShotCandidates, shotId],
+    [loadAssetsOverview, shotId],
   )
 
   const extractAssets = useCallback(async () => {
@@ -534,7 +478,6 @@ export function ChapterShotEditPage() {
     if (extractInFlightRef.current) return
     extractInFlightRef.current = true
     setExtractingAssets(true)
-    setPollEnabled(true)
     try {
       const scriptDivision = {
         total_shots: 1,
@@ -559,18 +502,6 @@ export function ChapterShotEditPage() {
       })
       const next = res.data
       if (next) {
-        setExtractedAux((prev) => {
-          if (!prev) return next as any
-          return {
-            ...prev,
-            characters: uniqByName([...(prev.characters ?? []), ...(next.characters ?? [])] as any),
-            scenes: uniqByName([...(prev.scenes ?? []), ...(next.scenes ?? [])] as any),
-            props: uniqByName([...(prev.props ?? []), ...(next.props ?? [])] as any),
-            costumes: uniqByName([...(prev.costumes ?? []), ...(next.costumes ?? [])] as any),
-            shots: next.shots ?? prev.shots,
-          } as any
-        })
-
         const extractedLines = ((next.shots?.[0] as any)?.dialogue_lines ?? []) as StudioShotDraftDialogueLine[]
         const savedKeys = new Set(
           savedDialogLines.map((l) => `${(l.speaker_name ?? '').trim()}|${(l.target_name ?? '').trim()}|${(l.text ?? '').trim()}`),
@@ -592,11 +523,11 @@ export function ChapterShotEditPage() {
           return merged
         })
         if (res.meta?.from_cache) {
-          message.success('已从缓存加载提取结果（仅展示，未入库）')
+          message.success('已从缓存加载提取结果；页面会优先展示数据表中的待确认候选')
         } else {
-          message.success('提取完成（仅展示，未入库）')
+          message.success('提取完成；页面会优先展示数据表中的待确认候选')
         }
-        await loadShotCandidates()
+        await loadAssetsOverview()
       } else {
         message.error(res.message || '提取失败')
       }
@@ -606,52 +537,12 @@ export function ChapterShotEditPage() {
       setExtractingAssets(false)
       extractInFlightRef.current = false
     }
-  }, [chapterId, loadShotCandidates, projectId, savedDialogLines, shot])
+  }, [chapterId, loadAssetsOverview, projectId, savedDialogLines, shot])
 
   const goShot = (id: string) => {
     if (!projectId || !chapterId || id === shotId) return
     navigate(`/projects/${projectId}/chapters/${chapterId}/shots/${id}/edit`)
   }
-
-  const pollExtractionDraft = useCallback(async () => {
-    if (!shotId) return
-    if (pollInFlightRef.current) return
-    pollInFlightRef.current = true
-    try {
-      const res = await StudioShotsService.getShotExtractionDraftApiV1StudioShotsShotIdExtractionDraftGet({ shotId })
-      setExtractionDraft(res.data ?? null)
-    } catch {
-      // 静默：避免每秒弹 toast；保留上一次状态
-    } finally {
-      pollInFlightRef.current = false
-    }
-  }, [shotId])
-
-  // 切换分镜时：停止轮询，但固定拉取一次默认 extraction-draft
-  useEffect(() => {
-    if (!shotId) return
-    if (pollTimerRef.current) window.clearInterval(pollTimerRef.current)
-    pollTimerRef.current = null
-    pollInFlightRef.current = false
-    setPollEnabled(false)
-    void pollExtractionDraft()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shotId])
-
-  useEffect(() => {
-    if (pollTimerRef.current) window.clearInterval(pollTimerRef.current)
-    pollTimerRef.current = null
-    pollInFlightRef.current = false
-    if (!pollEnabled) return
-    if (!shotId) return
-    void pollExtractionDraft()
-    pollTimerRef.current = window.setInterval(() => void pollExtractionDraft(), 1000)
-    return () => {
-      if (pollTimerRef.current) window.clearInterval(pollTimerRef.current)
-      pollTimerRef.current = null
-      pollInFlightRef.current = false
-    }
-  }, [pollEnabled, pollExtractionDraft, shotId])
 
   const openLinkingModal = useCallback(
     async (kind: AssetKind, name: string, item: EntityNameExistenceItem, hint: string) => {
@@ -709,14 +600,14 @@ export function ChapterShotEditPage() {
         })
       }
       message.success('已关联')
-      await loadShotCandidates()
+      await loadAssetsOverview()
       setLinkingOpen(false)
     } catch {
       message.error('关联失败')
     } finally {
       setLinkingActionLoading(false)
     }
-  }, [chapterId, linkingItem?.asset_id, linkingKind, loadShotCandidates, projectId, shotId])
+  }, [chapterId, linkingItem?.asset_id, linkingKind, loadAssetsOverview, projectId, shotId])
 
   const handleNewAsset = useCallback(
     async (asset: AssetVM) => {
@@ -758,7 +649,14 @@ export function ChapterShotEditPage() {
               const descQ = asset.description?.trim()
                 ? `&desc=${encodeURIComponent(asset.description.trim())}`
                 : ''
-              const ctxQ = `&projectId=${encodeURIComponent(projectId)}&chapterId=${encodeURIComponent(chapterId)}&shotId=${encodeURIComponent(shotId)}`
+              const styleQ =
+                `&visualStyle=${encodeURIComponent(projectVisualStyle)}` +
+                `&style=${encodeURIComponent(projectStyle)}`
+              const ctxQ =
+                `&projectId=${encodeURIComponent(projectId)}` +
+                `&chapterId=${encodeURIComponent(chapterId)}` +
+                `&shotId=${encodeURIComponent(shotId)}` +
+                styleQ
               if (asset.kind === 'scene' || asset.kind === 'prop' || asset.kind === 'costume') {
                 open(
                   `/assets?tab=${asset.kind}&create=1&name=${encodeURIComponent(name)}${descQ}${ctxQ}`,
@@ -787,7 +685,7 @@ export function ChapterShotEditPage() {
         message.error('existence-check 调用失败')
       }
     },
-    [openLinkingModal, chapterId, projectId, shotId],
+    [openLinkingModal, chapterId, projectId, projectStyle, projectVisualStyle, shotId],
   )
 
   const ignoreCandidate = useCallback(
@@ -799,7 +697,7 @@ export function ChapterShotEditPage() {
         await StudioShotsService.ignoreExtractedCandidateApiV1StudioShotsExtractedCandidatesCandidateIdIgnorePatch({
           candidateId: asset.candidateId,
         })
-        await loadShotCandidates()
+        await loadAssetsOverview()
         message.success('已忽略该候选项')
       } catch {
         message.error('忽略失败')
@@ -807,7 +705,7 @@ export function ChapterShotEditPage() {
         setCandidateActionIds((prev) => ({ ...prev, [asset.candidateId!]: false }))
       }
     },
-    [candidateActionIds, loadShotCandidates],
+    [candidateActionIds, loadAssetsOverview],
   )
 
 
@@ -984,12 +882,12 @@ export function ChapterShotEditPage() {
 
             <div className="space-y-2">
               <div className="flex items-center justify-between gap-2">
-                <div className="text-[11px] font-medium text-slate-600">本轮提取候选（{candidateItems.length}）</div>
+                <div className="text-[11px] font-medium text-slate-600">待确认候选（{candidateItems.length}）</div>
                 {candidateItems.length > 0 ? <Tag color="magenta">待确认</Tag> : null}
               </div>
               {candidateItems.length === 0 ? (
                 <div className="rounded-lg border border-dashed border-slate-200 bg-white px-3 py-4 text-xs text-slate-500">
-                  当前没有新的{titleLabel}候选
+                  当前没有待确认的{titleLabel}候选
                 </div>
               ) : (
                 <div className="grid grid-cols-12 gap-2">
@@ -1008,16 +906,8 @@ export function ChapterShotEditPage() {
   }
 
   const hasTitleAndExcerpt = !!title.trim() && !!scriptExcerpt.trim()
-  const linkedAssetCount =
-    linkedFromDraft.actor.length +
-    linkedFromDraft.scene.length +
-    linkedFromDraft.prop.length +
-    linkedFromDraft.costume.length
-  const pendingAssetCount =
-    unionAssets.actor.filter((item) => item.status === 'new').length +
-    unionAssets.scene.filter((item) => item.status === 'new').length +
-    unionAssets.prop.filter((item) => item.status === 'new').length +
-    unionAssets.costume.filter((item) => item.status === 'new').length
+  const linkedAssetCount = shotAssetsOverview?.summary.linked_count ?? 0
+  const pendingAssetCount = shotAssetsOverview?.summary.pending_count ?? 0
   const assetsReady = pendingAssetCount === 0 && linkedAssetCount > 0
   const dialogsReady = extractedDialogLines.length === 0
   const readyToShoot = hasTitleAndExcerpt && assetsReady && dialogsReady
@@ -1032,8 +922,8 @@ export function ChapterShotEditPage() {
     {
       key: 'assets',
       label: '资产',
-      tone: assetsReady ? 'success' : extractionDraft || extractedAux ? 'warning' : 'default',
-      text: assetsReady ? '关联资产已确认' : extractionDraft || extractedAux ? `还有 ${pendingAssetCount} 项待处理` : '建议先提取并确认资产',
+      tone: assetsReady ? 'success' : shotAssetsOverview ? 'warning' : 'default',
+      text: assetsReady ? '关联资产已确认' : shotAssetsOverview ? `还有 ${pendingAssetCount} 项待处理` : '建议先提取并确认资产',
     },
     {
       key: 'dialogs',

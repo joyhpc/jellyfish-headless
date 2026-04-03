@@ -47,27 +47,65 @@ async def list_by_shot(
     return list((await db.execute(stmt)).scalars().all())
 
 
-def _build_candidates_from_shot_draft(shot_draft: Any) -> list[dict[str, Any]]:
+def _payload_from_asset(item: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    for key in ("id", "file_id", "thumbnail", "description"):
+        value = getattr(item, key, None)
+        if value is None:
+            continue
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                continue
+        payload[key] = value
+    return payload
+
+
+def _build_candidates_from_shot_draft(
+    shot_draft: Any,
+    *,
+    character_by_name: dict[str, Any] | None = None,
+    scene_by_name: dict[str, Any] | None = None,
+    prop_by_name: dict[str, Any] | None = None,
+    costume_by_name: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
     if getattr(shot_draft, "scene_name", None):
+        scene_name = str(shot_draft.scene_name).strip()
+        scene_payload = _payload_from_asset((scene_by_name or {}).get(scene_name))
         candidates.append(
             {
                 "candidate_type": ShotCandidateType.scene.value,
-                "candidate_name": shot_draft.scene_name,
+                "candidate_name": scene_name,
+                "payload": scene_payload,
             }
         )
-    for candidate_type, names in (
-        (ShotCandidateType.character.value, list(getattr(shot_draft, "character_names", []) or [])),
-        (ShotCandidateType.prop.value, list(getattr(shot_draft, "prop_names", []) or [])),
-        (ShotCandidateType.costume.value, list(getattr(shot_draft, "costume_names", []) or [])),
+    for candidate_type, names, source_map in (
+        (
+            ShotCandidateType.character.value,
+            list(getattr(shot_draft, "character_names", []) or []),
+            character_by_name or {},
+        ),
+        (
+            ShotCandidateType.prop.value,
+            list(getattr(shot_draft, "prop_names", []) or []),
+            prop_by_name or {},
+        ),
+        (
+            ShotCandidateType.costume.value,
+            list(getattr(shot_draft, "costume_names", []) or []),
+            costume_by_name or {},
+        ),
     ):
         for name in names:
-            if not str(name).strip():
+            normalized_name = str(name).strip()
+            if not normalized_name:
                 continue
             candidates.append(
                 {
                     "candidate_type": candidate_type,
-                    "candidate_name": str(name).strip(),
+                    "candidate_name": normalized_name,
+                    "payload": _payload_from_asset(source_map.get(normalized_name)),
                 }
             )
     return candidates
@@ -87,6 +125,10 @@ async def sync_from_extraction_draft(
     stmt = select(Shot).where(Shot.chapter_id == chapter_id)
     shots = (await db.execute(stmt)).scalars().all()
     shot_by_index = {shot.index: shot for shot in shots}
+    character_by_name = {str(item.name).strip(): item for item in (draft.characters or []) if str(item.name).strip()}
+    scene_by_name = {str(item.name).strip(): item for item in (draft.scenes or []) if str(item.name).strip()}
+    prop_by_name = {str(item.name).strip(): item for item in (draft.props or []) if str(item.name).strip()}
+    costume_by_name = {str(item.name).strip(): item for item in (draft.costumes or []) if str(item.name).strip()}
 
     for shot_draft in draft.shots:
         shot = shot_by_index.get(shot_draft.index)
@@ -95,7 +137,13 @@ async def sync_from_extraction_draft(
         await replace_for_shot(
             db,
             shot_id=shot.id,
-            candidates=_build_candidates_from_shot_draft(shot_draft),
+            candidates=_build_candidates_from_shot_draft(
+                shot_draft,
+                character_by_name=character_by_name,
+                scene_by_name=scene_by_name,
+                prop_by_name=prop_by_name,
+                costume_by_name=costume_by_name,
+            ),
         )
 
 
@@ -109,19 +157,36 @@ async def replace_for_shot(
     if shot is None:
         raise ValueError(entity_not_found("Shot"))
 
+    existing_stmt = select(ShotExtractedCandidate).where(ShotExtractedCandidate.shot_id == shot_id)
+    existing_rows = list((await db.execute(existing_stmt)).scalars().all())
+    linked_by_key: dict[tuple[str, str], tuple[str | None, datetime | None]] = {}
+    for row in existing_rows:
+        if row.candidate_status != ShotCandidateStatus.linked:
+            continue
+        key = (str(row.candidate_type), str(row.candidate_name).strip())
+        linked_by_key[key] = (row.linked_entity_id, row.confirmed_at)
+
     await db.execute(delete(ShotExtractedCandidate).where(ShotExtractedCandidate.shot_id == shot_id))
     shot.skip_extraction = False
     shot.last_extracted_at = _utc_now()
 
     rows: list[ShotExtractedCandidate] = []
     for item in candidates:
+        candidate_type = ShotCandidateType(str(item["candidate_type"]))
+        candidate_name = str(item["candidate_name"]).strip()
+        linked_entity_id, confirmed_at = linked_by_key.get(
+            (candidate_type.value, candidate_name),
+            (None, None),
+        )
         row = ShotExtractedCandidate(
             shot_id=shot_id,
-            candidate_type=ShotCandidateType(str(item["candidate_type"])),
-            candidate_name=str(item["candidate_name"]).strip(),
-            candidate_status=ShotCandidateStatus.pending,
+            candidate_type=candidate_type,
+            candidate_name=candidate_name,
+            candidate_status=ShotCandidateStatus.linked if linked_entity_id else ShotCandidateStatus.pending,
+            linked_entity_id=linked_entity_id,
             source=str(item.get("source") or "extraction"),
             payload=dict(item.get("payload") or {}),
+            confirmed_at=confirmed_at,
         )
         db.add(row)
         rows.append(row)

@@ -6,6 +6,7 @@ import type { ApiResponse_list_ShotExtractedCandidateRead__ } from '../models/Ap
 import type { ApiResponse_NoneType_ } from '../models/ApiResponse_NoneType_';
 import type { ApiResponse_PaginatedData_ShotLinkedAssetItem__ } from '../models/ApiResponse_PaginatedData_ShotLinkedAssetItem__';
 import type { ApiResponse_PaginatedData_ShotRead__ } from '../models/ApiResponse_PaginatedData_ShotRead__';
+import type { ApiResponse_ShotAssetsOverviewRead_ } from '../models/ApiResponse_ShotAssetsOverviewRead_';
 import type { ApiResponse_ShotExtractedCandidateRead_ } from '../models/ApiResponse_ShotExtractedCandidateRead_';
 import type { ApiResponse_ShotRead_ } from '../models/ApiResponse_ShotRead_';
 import type { ApiResponse_StudioScriptExtractionDraft_ } from '../models/ApiResponse_StudioScriptExtractionDraft_';
@@ -113,6 +114,27 @@ export class StudioShotsService {
         return __request(OpenAPI, {
             method: 'GET',
             url: '/api/v1/studio/shots/{shot_id}/extracted-candidates',
+            path: {
+                'shot_id': shotId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * 获取镜头资产总览（已关联资产 + 提取候选）
+     * @returns ApiResponse_ShotAssetsOverviewRead_ Successful Response
+     * @throws ApiError
+     */
+    public static getShotAssetsOverviewApiApiV1StudioShotsShotIdAssetsOverviewGet({
+        shotId,
+    }: {
+        shotId: string,
+    }): CancelablePromise<ApiResponse_ShotAssetsOverviewRead_> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/api/v1/studio/shots/{shot_id}/assets-overview',
             path: {
                 'shot_id': shotId,
             },

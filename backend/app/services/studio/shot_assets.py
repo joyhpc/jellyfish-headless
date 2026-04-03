@@ -137,14 +137,12 @@ async def delete_project_asset_link(
         )
 
 
-async def list_shot_linked_assets_paginated(
+async def list_shot_linked_assets(
     db: AsyncSession,
     *,
     shot_id: str,
-    page: int,
-    page_size: int,
-) -> ApiResponse[PaginatedData[ShotLinkedAssetItem]]:
-    """获取镜头关联的角色/道具/场景/服装（分页）。"""
+) -> list[ShotLinkedAssetItem]:
+    """获取镜头关联的角色/道具/场景/服装。"""
     await require_entity(db, Shot, shot_id, detail=entity_not_found("Shot"), status_code=400)
 
     character_ids = (
@@ -263,6 +261,18 @@ async def list_shot_linked_assets_paginated(
         )
 
     items.sort(key=lambda x: (x.type, x.name, x.id))
+    return items
+
+
+async def list_shot_linked_assets_paginated(
+    db: AsyncSession,
+    *,
+    shot_id: str,
+    page: int,
+    page_size: int,
+) -> ApiResponse[PaginatedData[ShotLinkedAssetItem]]:
+    """获取镜头关联的角色/道具/场景/服装（分页）。"""
+    items = await list_shot_linked_assets(db, shot_id=shot_id)
     total = len(items)
     start = (page - 1) * page_size
     end = start + page_size

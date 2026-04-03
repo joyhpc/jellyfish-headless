@@ -258,3 +258,40 @@ class ShotLinkedAssetItem(BaseModel):
     )
     name: str = Field(..., description="实体名称")
     thumbnail: str = Field("", description="缩略图下载地址（/api/v1/studio/files/{file_id}/download）")
+
+
+ShotAssetOverviewSource = Literal["linked", "candidate", "both"]
+
+
+class ShotAssetOverviewItem(BaseModel):
+    """分镜资产总览项：统一返回已关联资产与提取候选的合并视图。"""
+
+    key: str = Field(..., description="合并键：type:name")
+    type: ShotLinkedAssetType = Field(..., description="实体类型：character/prop/scene/costume")
+    name: str = Field(..., description="资产名称")
+    description: str | None = Field(None, description="候选描述（来自 extraction payload）")
+    thumbnail: str | None = Field(None, description="缩略图")
+    file_id: str | None = Field(None, description="缩略图或参考图文件 ID")
+
+    source: ShotAssetOverviewSource = Field(..., description="来源：linked/candidate/both")
+    candidate_id: int | None = Field(None, description="候选项 ID")
+    candidate_status: ShotCandidateStatus | None = Field(None, description="候选确认状态")
+
+    linked_entity_id: str | None = Field(None, description="当前已关联实体 ID")
+    linked_image_id: int | None = Field(None, description="当前已关联实体的 image 行 ID")
+    is_linked: bool = Field(..., description="当前是否已关联到镜头")
+
+
+class ShotAssetsOverviewSummary(BaseModel):
+    linked_count: int = Field(..., description="已关联项数量")
+    pending_count: int = Field(..., description="待确认候选数量")
+    ignored_count: int = Field(..., description="已忽略候选数量")
+    total_count: int = Field(..., description="总项数（含 ignored）")
+
+
+class ShotAssetsOverviewRead(BaseModel):
+    shot_id: str = Field(..., description="镜头 ID")
+    skip_extraction: bool = Field(..., description="是否明确跳过提取")
+    status: ShotStatus = Field(..., description="镜头流程状态")
+    summary: ShotAssetsOverviewSummary = Field(..., description="总览统计")
+    items: list[ShotAssetOverviewItem] = Field(default_factory=list, description="资产总览项")

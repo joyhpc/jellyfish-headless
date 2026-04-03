@@ -111,7 +111,10 @@ docker compose --env-file deploy/compose/.env -f deploy/compose/docker-compose.y
 ```
 
 首次启动会自动运行一次 `backend/init_db.py` 创建表结构（`backend-init-db` 服务）。
-并在其成功后自动导入提示词模板 SQL：`backend/sql/init_prompt_templte.sql`（`mysql-init-prompt-templates` 服务）。
+并在其成功后自动按文件名前缀顺序依次导入 `backend/sql/` 下的 SQL 文件（`mysql-init-sql` 服务），例如：
+
+- `001-init-prompt-template.sql`
+- `002-add-shot-extracted-candidates.sql`
 
 ## 🧑‍💻 开发环境启动（前后端分离）
 

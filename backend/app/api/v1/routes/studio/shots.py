@@ -41,6 +41,7 @@ from app.services.studio.shots import (
     update as update_shot_service,
 )
 from app.services.studio import (
+    get_shot_assets_overview,
     ignore_shot_extracted_candidate,
     link_shot_extracted_candidate,
     list_shot_extracted_candidates,
@@ -53,6 +54,7 @@ from app.schemas.studio.shots import (
     ProjectActorLinkRead,
     ProjectAssetLinkCreate,
     ProjectCostumeLinkRead,
+    ShotAssetsOverviewRead,
     ShotLinkedAssetItem,
     ShotCreate,
     ShotDetailCreate,
@@ -153,6 +155,19 @@ async def get_shot_extracted_candidates(
 ) -> ApiResponse[list[ShotExtractedCandidateRead]]:
     rows = await list_shot_extracted_candidates(db, shot_id=shot_id)
     return success_response([ShotExtractedCandidateRead.model_validate(row) for row in rows])
+
+
+@router.get(
+    "/{shot_id}/assets-overview",
+    response_model=ApiResponse[ShotAssetsOverviewRead],
+    summary="获取镜头资产总览（已关联资产 + 提取候选）",
+)
+async def get_shot_assets_overview_api(
+    shot_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[ShotAssetsOverviewRead]:
+    data = await get_shot_assets_overview(db, shot_id=shot_id)
+    return success_response(data)
 
 
 @router.patch(
